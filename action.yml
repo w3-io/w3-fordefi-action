@@ -1,43 +1,149 @@
-# TODO: Replace this entire file with your action's definition.
-#
-# This file is the contract between your action and the workflow runner.
-# It defines what inputs your action accepts and what outputs it produces.
-# Keep inputs minimal and well-named. See the README for naming conventions.
-#
-# Reference: https://docs.github.com/en/actions/creating-actions/metadata-syntax-for-github-actions
-
-name: 'W3 YourPartner Action'          # TODO: e.g. "W3 Cube3 Action"
-description: 'Short description'        # TODO: what does your action do?
+name: 'W3 ForDefi Action'
+description: 'MPC-secured custody, multi-chain transactions, swaps, and WaaS via ForDefi'
 author: 'w3-io'
 
 inputs:
   command:
-    description: 'Operation to perform'  # TODO: list your commands here
+    description: >-
+      Operation to perform. 71 commands across 17 categories:
+      Vaults (list-vaults, create-vault, get-vault, get-vault-asset,
+      list-vault-assets, submit-vault-proposal, archive-vault,
+      restore-vault, rename-vault, create-vault-address,
+      list-vault-addresses, rename-vault-address, export-vaults),
+      Vault Groups (list-vault-groups),
+      Transactions (list-transactions, get-transaction,
+      create-transaction, create-transfer,
+      create-transaction-and-wait, approve-transaction,
+      abort-transaction, release-transaction,
+      predict-transaction, push-transaction,
+      update-spam-state, trigger-signing, export-transactions),
+      Batch Transactions (create-batch-transaction,
+      predict-batch-transaction, abort-batch-transaction,
+      approve-batch-transaction),
+      Swaps (get-swap-providers, get-swap-quotes, create-swap,
+      predict-swap),
+      Assets (get-owned-asset, list-owned-assets,
+      update-asset-config, fetch-asset-prices, create-asset-info),
+      Blockchains (list-blockchains, get-suggested-fees),
+      Address Book (create-contact, list-contacts,
+      create-batch-contacts, abort-contact-proposal, edit-contact),
+      Users (list-users, get-user),
+      User Groups (list-user-groups, get-user-group),
+      End Users (list-end-users, create-end-user,
+      get-current-end-user, get-end-user, delete-end-user,
+      set-export-key-permissions),
+      Authorization Tokens (issue-auth-token, list-auth-tokens,
+      delete-auth-token),
+      Organizations (import-keys, abort-import-keys,
+      get-import-keys-status, list-org-keys),
+      Webhooks (test-webhook, trigger-transaction-webhook),
+      Audit Log (list-audit-log, export-audit-log),
+      Exports (get-export, abort-export),
+      Enclave Keys (list-enclave-keys)
     required: true
-  api-key:
-    description: 'API key for authentication'
-    required: true                       # TODO: set to false if your API needs no auth
-  api-url:
-    description: 'API base URL override (for testing or staging)'
-    required: false
-    default: 'https://api.yourpartner.com'  # TODO: your partner's production API URL
 
-  # TODO: Add your command-specific inputs below. Use plain names without
-  # partner prefix. For example:
-  #
-  # address:
-  #   description: 'Blockchain address to inspect'
-  #   required: false
-  #
-  # symbols:
-  #   description: 'Comma-separated token symbols (e.g. "BTC,ETH")'
-  #   required: false
+  access-token:
+    description: 'ForDefi JWT access token (from API User creation)'
+    required: true
+
+  private-key:
+    description: 'PEM-encoded P-256 private key for request signing (required for transactional operations)'
+    required: false
+
+  api-url:
+    description: 'API base URL override'
+    required: false
+    default: 'https://api.fordefi.com'
+
+  # ── ID inputs ────────────────────────────────────────────────────────
+  vault-id:
+    description: 'Vault ID'
+    required: false
+  asset-id:
+    description: 'Asset ID'
+    required: false
+  address-id:
+    description: 'Vault address ID'
+    required: false
+  transaction-id:
+    description: 'Transaction ID'
+    required: false
+  batch-id:
+    description: 'Batch transaction ID'
+    required: false
+  contact-id:
+    description: 'Contact ID'
+    required: false
+  proposal-id:
+    description: 'Proposal ID'
+    required: false
+  user-id:
+    description: 'User or end-user ID'
+    required: false
+  group-id:
+    description: 'User group ID'
+    required: false
+  token-id:
+    description: 'Authorization token ID'
+    required: false
+  export-id:
+    description: 'Export ID'
+    required: false
+  chain-type:
+    description: 'Blockchain type (e.g. evm, solana, bitcoin)'
+    required: false
+
+  # ── Common inputs ────────────────────────────────────────────────────
+  name:
+    description: 'Name (for rename operations)'
+    required: false
+  data:
+    description: 'JSON request body for create/update operations'
+    required: false
+
+  # ── Pagination ───────────────────────────────────────────────────────
+  page_size:
+    description: 'Number of results per page'
+    required: false
+  page_token:
+    description: 'Pagination token'
+    required: false
+  sort_by:
+    description: 'Sort field'
+    required: false
+  sort_order:
+    description: 'Sort direction (asc/desc)'
+    required: false
+
+  # ── Filters ──────────────────────────────────────────────────────────
+  search:
+    description: 'Search query'
+    required: false
+  state:
+    description: 'Transaction state filter'
+    required: false
+  type:
+    description: 'Transaction type filter'
+    required: false
+  format:
+    description: 'Export format'
+    required: false
+  start_date:
+    description: 'Start date filter'
+    required: false
+  end_date:
+    description: 'End date filter'
+    required: false
+  chain_type:
+    description: 'Chain type for fee suggestions'
+    required: false
+  chain_unique_id:
+    description: 'Chain unique ID for fee suggestions'
+    required: false
 
 outputs:
   result:
     description: 'JSON result of the operation'
-    # This is the only output. Always a JSON string.
-    # Document the schema in your w3-action.yaml and docs/guide.md.
 
 runs:
   using: 'node20'

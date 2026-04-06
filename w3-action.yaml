@@ -1,44 +1,104 @@
-# TODO: This file describes your action for the W3 MCP server.
-# AI agents use this to discover your action, understand its commands,
-# and generate correct workflow YAML. Keep it in sync with action.yml.
-#
-# On release, this file is synced to the MCP's registry.yaml.
-
-kind: integration              # integration | primitive | utility
-partner: yourpartner           # TODO: machine-readable partner ID
-name: YourPartner Integration  # TODO: human-readable name
+kind: integration
+partner: ForDefi
+name: ForDefi MPC Custody
 version: 1.0.0
-repo: w3-io/w3-yourpartner-action  # TODO: your repo
+repo: w3-io/w3-fordefi-action
+
+description: >
+  MPC-secured custody across 10+ blockchain families (EVM, Solana,
+  Bitcoin, Cosmos, Sui, Aptos, Starknet, TON). Sub-second signing,
+  policy-based approval workflows, transaction simulation with revert
+  prediction, AML screening, and WaaS. Acquired by Paxos (Nov 2025).
+
+context: >
+  Use ForDefi when the workflow requires institutional-grade custody
+  with MPC key management, policy-enforced approval workflows, or
+  multi-chain transaction signing. ForDefi vaults hold assets across
+  chains with a single API. Choose over native chain syscalls when you
+  need custody controls, audit trails, or the policy engine.
 
 commands:
-  # TODO: Define each command your action supports. Example:
-  #
-  # - name: inspect
-  #   description: >
-  #     Risk assessment for a blockchain address. Returns per-chain
-  #     scores for fraud, compliance, and cyber risk.
-  #   inputs:
-  #     address:
-  #       type: string
-  #       required: true
-  #       description: Blockchain address to inspect
-  #     chain-id:
-  #       type: string
-  #       required: false
-  #       description: Filter to a specific chain
-  #   outputs:
-  #     result:
-  #       type: object
-  #       description: Full risk score breakdown
-
-  - name: example-command
-    description: TODO - describe what this command does
+  # ── Vaults ────────────────────────────────────────────────────────
+  - name: list-vaults
+    description: List all vaults in the organization
     inputs:
-      input:
-        type: string
-        required: true
-        description: TODO - describe this input
-    outputs:
-      result:
-        type: object
-        description: TODO - describe the output shape
+      page_size: { type: number, required: false, description: Results per page }
+      page_token: { type: string, required: false, description: Pagination token }
+
+  - name: create-vault
+    description: Create a new MPC vault (requires signing)
+    inputs:
+      data: { type: string, required: true, description: "JSON vault config (name, type, key_type)" }
+
+  - name: get-vault
+    description: Get vault details
+    inputs:
+      vault-id: { type: string, required: true, description: Vault ID }
+
+  - name: list-vault-assets
+    description: List all assets in a vault
+    inputs:
+      vault-id: { type: string, required: true, description: Vault ID }
+
+  - name: create-vault-address
+    description: Create a new blockchain address in a vault (requires signing)
+    inputs:
+      vault-id: { type: string, required: true, description: Vault ID }
+      data: { type: string, required: true, description: "JSON address config (chain, name)" }
+
+  # ── Transactions ──────────────────────────────────────────────────
+  - name: create-transaction
+    description: Create a multi-chain transaction (requires signing)
+    inputs:
+      data: { type: string, required: true, description: "JSON transaction payload (vault_id, type, details)" }
+
+  - name: create-transfer
+    description: Simplified transfer shortcut (requires signing)
+    inputs:
+      data: { type: string, required: true, description: JSON transfer payload }
+
+  - name: predict-transaction
+    description: Simulate transaction — fees, effects, revert detection, risk screening, policy matching
+    inputs:
+      data: { type: string, required: true, description: JSON transaction payload to simulate }
+
+  - name: approve-transaction
+    description: Approve a pending transaction (requires signing)
+    inputs:
+      transaction-id: { type: string, required: true, description: Transaction ID }
+
+  - name: abort-transaction
+    description: Abort a pending transaction (requires signing)
+    inputs:
+      transaction-id: { type: string, required: true, description: Transaction ID }
+
+  - name: get-transaction
+    description: Get transaction details and status
+    inputs:
+      transaction-id: { type: string, required: true, description: Transaction ID }
+
+  - name: list-transactions
+    description: List transactions with optional filters
+    inputs:
+      vault_id: { type: string, required: false, description: Filter by vault }
+      state: { type: string, required: false, description: Filter by state }
+
+  # ── Swaps ─────────────────────────────────────────────────────────
+  - name: get-swap-quotes
+    description: Get swap quotes from available providers
+    inputs:
+      data: { type: string, required: true, description: JSON swap quote request }
+
+  - name: create-swap
+    description: Execute a token swap (requires signing)
+    inputs:
+      data: { type: string, required: true, description: JSON swap execution payload }
+
+  # ── Blockchains ───────────────────────────────────────────────────
+  - name: list-blockchains
+    description: List all supported blockchains
+
+  - name: get-suggested-fees
+    description: Get fee suggestions for a chain
+    inputs:
+      chain_type: { type: string, required: false, description: "Chain type (evm, solana, etc.)" }

@@ -2,8 +2,8 @@
  * ForDefi API client.
  *
  * Handles Bearer token auth for all requests and ECDSA P-256 request
- * signing for transactional operations (creating transactions, contacts,
- * etc.). Uses Node.js built-in crypto — no external dependencies.
+ * signing for transactional operations. HTTP goes through fetchWithRetry
+ * with 30s timeout, retry on 429/5xx, and 204 No Content handling.
  *
  * ForDefi API docs: https://docs.fordefi.com/
  * Base URLs:
@@ -12,9 +12,41 @@
  */
 
 import { createSign } from 'node:crypto'
-import { request, W3ActionError } from '@w3-io/action-core'
+import { W3ActionError } from '@w3-io/action-core'
 
 const DEFAULT_BASE_URL = 'https://api.fordefi.com'
+const TIMEOUT_MS = 30_000
+const MAX_RETRIES = 3
+const RETRY_DELAY_MS = 1000
+
+async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    try {
+      const res = await fetch(url, { ...opts, signal: controller.signal })
+      clearTimeout(timer)
+      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+        const retryAfter = res.headers.get('retry-after')
+        const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
+        const delay = Number.isFinite(retrySeconds) ? retrySeconds * 1000 : RETRY_DELAY_MS * 2 ** attempt
+        await new Promise(r => setTimeout(r, delay))
+        continue
+      }
+      return res
+    } catch (e) {
+      clearTimeout(timer)
+      if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+        await new Promise(r => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
+        continue
+      }
+      if (e.name === 'AbortError') {
+        throw new W3ActionError('TIMEOUT', `Request timed out after ${TIMEOUT_MS}ms: ${url}`)
+      }
+      throw e
+    }
+  }
+}
 
 export class ForDefiClient {
   /**
@@ -36,48 +68,64 @@ export class ForDefiClient {
   // Transport
   // ---------------------------------------------------------------------------
 
+  async #apiCall(method, url, headers, body) {
+    const res = await fetchWithRetry(url, {
+      method,
+      headers,
+      ...(body !== undefined ? { body } : {}),
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, { statusCode: res.status })
+    }
+    if (res.status === 204) return { success: true }
+    const text = await res.text()
+    if (!text) return { success: true }
+    try {
+      return JSON.parse(text)
+    } catch (e) {
+      throw new W3ActionError('INVALID_RESPONSE', `ForDefi returned unparseable response: ${text.slice(0, 200)}`)
+    }
+  }
+
+  #baseHeaders() {
+    return { Authorization: `Bearer ${this.accessToken}`, Accept: 'application/json' }
+  }
+
   async get(path, query) {
-    const url = this.#buildUrl(path, query)
-    const { body } = await request(url, { headers: this.#baseHeaders() })
-    return body
+    return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
   async post(path, payload, { sign = false } = {}) {
-    const url = this.#buildUrl(path)
-    const jsonBody = payload ? JSON.stringify(payload) : ''
+    const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
 
     if (sign) {
       this.#requirePrivateKey()
       const timestamp = Date.now().toString()
-      headers['x-signature'] = this.#sign(path, timestamp, jsonBody)
+      headers['x-signature'] = this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }
 
-    const { body } = await request(url, { method: 'POST', headers, body: jsonBody })
-    return body
+    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody)
   }
 
   async put(path, payload, { sign = false } = {}) {
-    const url = this.#buildUrl(path)
-    const jsonBody = payload ? JSON.stringify(payload) : ''
+    const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
 
     if (sign) {
       this.#requirePrivateKey()
       const timestamp = Date.now().toString()
-      headers['x-signature'] = this.#sign(path, timestamp, jsonBody)
+      headers['x-signature'] = this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }
 
-    const { body } = await request(url, { method: 'PUT', headers, body: jsonBody })
-    return body
+    return this.#apiCall('PUT', this.#buildUrl(path), headers, jsonBody)
   }
 
-  async del(path) {
-    const url = this.#buildUrl(path)
-    const { body } = await request(url, { method: 'DELETE', headers: this.#baseHeaders() })
-    return body
+  async delete(path) {
+    return this.#apiCall('DELETE', this.#buildUrl(path), this.#baseHeaders())
   }
 
   // ---------------------------------------------------------------------------
@@ -100,10 +148,6 @@ export class ForDefiClient {
         'Set private-key input with your PEM-encoded P-256 key.',
       )
     }
-  }
-
-  #baseHeaders() {
-    return { Authorization: `Bearer ${this.accessToken}`, Accept: 'application/json' }
   }
 
   #buildUrl(path, query) {
@@ -225,7 +269,7 @@ export class ForDefiClient {
   createEndUser(p) { return this.post('/api/v1/end-users', p) }
   getCurrentEndUser() { return this.get('/api/v1/end-users/current') }
   getEndUser(id) { return this.get(`/api/v1/end-users/${id}`) }
-  deleteEndUser(id) { return this.del(`/api/v1/end-users/${id}`) }
+  deleteEndUser(id) { return this.delete(`/api/v1/end-users/${id}`) }
   setExportKeyPermissions(id, p) { return this.put(`/api/v1/end-users/${id}/set-export-end-user-keys-permissions`, p) }
 
   // ---------------------------------------------------------------------------
@@ -234,7 +278,7 @@ export class ForDefiClient {
 
   issueAuthToken(p) { return this.post('/api/v1/authorization-tokens', p) }
   listAuthTokens(q) { return this.get('/api/v1/authorization-tokens', q) }
-  deleteAuthToken(id) { return this.del(`/api/v1/authorization-tokens/${id}`) }
+  deleteAuthToken(id) { return this.delete(`/api/v1/authorization-tokens/${id}`) }
 
   // ---------------------------------------------------------------------------
   // Organizations (4)

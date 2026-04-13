@@ -27653,8 +27653,17 @@ function createCommandRouter(commands) {
  *   - $W3_BRIDGE_URL    → TCP URL (macOS Docker Desktop fallback)
  *
  * Usage:
- *   import { bridge } from "@w3-io/action-core";
+ *   import { bridge, ethereum } from "@w3-io/action-core";
  *
+ *   // Typed helpers (recommended — autocomplete + type checking):
+ *   const receipt = await ethereum.callContract({
+ *     contract: "0x...",
+ *     method: "deposit(uint256)",
+ *     args: ["1000000"],
+ *     gasMultiplier: "1.5",
+ *   });
+ *
+ *   // Generic (full control):
  *   const balance = await bridge.chain("ethereum", "get-balance", {
  *     address: "0x...",
  *   });
@@ -27744,7 +27753,17 @@ async function bridgeRequest(path, body) {
     }
 }
 // ---------------------------------------------------------------------------
-// Public API
+// Internal helpers
+// ---------------------------------------------------------------------------
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function chainRequest(chainName, action, params, network) {
+    return bridgeRequest(`/${chainName}/${action}`, {
+        network: network ?? chainName,
+        params,
+    });
+}
+// ---------------------------------------------------------------------------
+// Public API — generic
 // ---------------------------------------------------------------------------
 async function health() {
     try {
@@ -27755,22 +27774,82 @@ async function health() {
         return false;
     }
 }
+/**
+ * Execute a chain operation.
+ *
+ * For type-safe calls, use the typed helpers (`ethereum`, `solana`,
+ * `bitcoin`) instead. This generic method accepts any params.
+ */
 async function chain(chainName, action, params, network) {
-    return (await bridgeRequest(`/${chainName}/${action}`, {
-        network: network ?? chainName,
-        params,
-    }));
+    return chainRequest(chainName, action, params, network);
 }
 async function bridge_crypto(action, params) {
     return (await bridgeRequest(`/crypto/${action}`, {
         params,
     }));
 }
+// ---------------------------------------------------------------------------
+// Public API — typed chain helpers
+// ---------------------------------------------------------------------------
+/** Typed Ethereum operations. */
+const ethereum = {
+    getBalance: (params, network) => chainRequest("ethereum", "get-balance", params, network),
+    readContract: (params, network) => chainRequest("ethereum", "read-contract", params, network),
+    callContract: (params, network) => chainRequest("ethereum", "call-contract", params, network),
+    transfer: (params, network) => chainRequest("ethereum", "transfer", params, network),
+    sendTransaction: (params, network) => chainRequest("ethereum", "send-transaction", params, network),
+    deployContract: (params, network) => chainRequest("ethereum", "deploy-contract", params, network),
+    transferToken: (params, network) => chainRequest("ethereum", "transfer-token", params, network),
+    approveToken: (params, network) => chainRequest("ethereum", "approve-token", params, network),
+    transferNft: (params, network) => chainRequest("ethereum", "transfer-nft", params, network),
+    getTransaction: (params, network) => chainRequest("ethereum", "get-transaction", params, network),
+    waitForTransaction: (params, network) => chainRequest("ethereum", "wait-for-transaction", params, network),
+    getEvents: (params, network) => chainRequest("ethereum", "get-events", params, network),
+    resolveName: (params, network) => chainRequest("ethereum", "resolve-name", params, network),
+    getTokenBalance: (params, network) => chainRequest("ethereum", "get-token-balance", params, network),
+    getTokenAllowance: (params, network) => chainRequest("ethereum", "get-token-allowance", params, network),
+    getNftOwner: (params, network) => chainRequest("ethereum", "get-nft-owner", params, network),
+    getNftMetadata: (params, network) => chainRequest("ethereum", "get-nft-metadata", params, network),
+};
+/** Typed Solana operations. */
+const solana = {
+    getBalance: (params, network) => chainRequest("solana", "get-balance", params, network),
+    transfer: (params, network) => chainRequest("solana", "transfer", params, network),
+    transferToken: (params, network) => chainRequest("solana", "transfer-token", params, network),
+    callProgram: (params, network) => chainRequest("solana", "call-program", params, network),
+    getAccount: (params, network) => chainRequest("solana", "get-account", params, network),
+    getTokenBalance: (params, network) => chainRequest("solana", "get-token-balance", params, network),
+    getTokenAccounts: (params, network) => chainRequest("solana", "get-token-accounts", params, network),
+    getTransaction: (params, network) => chainRequest("solana", "get-transaction", params, network),
+    waitForTransaction: (params, network) => chainRequest("solana", "wait-for-transaction", params, network),
+    /** Generate an ephemeral keypair for use as an additional signer. */
+    generateKeypair: () => bridgeRequest("/solana/generate-keypair", {}),
+    /** Get the payer's public key (no secret exposed). */
+    payerAddress: () => bridgeRequest("/solana/payer-address"),
+};
+/** Typed Bitcoin operations. */
+const bitcoin = {
+    getBalance: (params, network) => chainRequest("bitcoin", "get-balance", params, network),
+    send: (params, network) => chainRequest("bitcoin", "send", params, network),
+    getUtxos: (params, network) => chainRequest("bitcoin", "get-utxos", params, network),
+    getTransaction: (params, network) => chainRequest("bitcoin", "get-transaction", params, network),
+    getFeeRate: (params, network) => chainRequest("bitcoin", "get-fee-rate", params ?? {}, network),
+    waitForTransaction: (params, network) => chainRequest("bitcoin", "wait-for-transaction", params, network),
+};
+// ---------------------------------------------------------------------------
+// Default export
+// ---------------------------------------------------------------------------
 /**
  * The bridge client.
  *
- *   import { bridge } from "@w3-io/action-core";
+ *   import { bridge, ethereum, solana, bitcoin } from "@w3-io/action-core";
  *
+ *   // Typed (recommended):
+ *   const receipt = await ethereum.callContract({ contract, method, args });
+ *   const sig = await solana.callProgram({ programId, accounts, data });
+ *   const tx = await bitcoin.send({ to, amount });
+ *
+ *   // Generic:
  *   const bal = await bridge.chain("ethereum", "get-balance", { address });
  *   const hash = await bridge.crypto("keccak-256", { data: "0x..." });
  *   const ok = await bridge.health();
@@ -27949,15 +28028,17 @@ async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
       if ((res.status === 429 || res.status >= 500) && attempt < retries) {
         const retryAfter = res.headers.get('retry-after')
         const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
-        const delay = Number.isFinite(retrySeconds) ? retrySeconds * 1000 : RETRY_DELAY_MS * 2 ** attempt
-        await new Promise(r => setTimeout(r, delay))
+        const delay = Number.isFinite(retrySeconds)
+          ? retrySeconds * 1000
+          : RETRY_DELAY_MS * 2 ** attempt
+        await new Promise((r) => setTimeout(r, delay))
         continue
       }
       return res
     } catch (e) {
       clearTimeout(timer)
       if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
-        await new Promise(r => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
+        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
         continue
       }
       if (e.name === 'AbortError') {
@@ -28003,8 +28084,11 @@ class ForDefiClient {
     if (!text) return { success: true }
     try {
       return JSON.parse(text)
-    } catch (e) {
-      throw new error_W3ActionError('INVALID_RESPONSE', `ForDefi returned unparseable response: ${text.slice(0, 200)}`)
+    } catch (_e) {
+      throw new error_W3ActionError(
+        'INVALID_RESPONSE',
+        `ForDefi returned unparseable response: ${text.slice(0, 200)}`,
+      )
     }
   }
 
@@ -28065,7 +28149,7 @@ class ForDefiClient {
       throw new error_W3ActionError(
         'MISSING_PRIVATE_KEY',
         'ForDefi private key required for transactional operations. ' +
-        'Set private-key input with your PEM-encoded P-256 key.',
+          'Set private-key input with your PEM-encoded P-256 key.',
       )
     }
   }
@@ -28084,157 +28168,299 @@ class ForDefiClient {
   // Vaults (13 endpoints)
   // ---------------------------------------------------------------------------
 
-  listVaults(q) { return this.get('/api/v1/vaults', q) }
-  createVault(p) { return this.post('/api/v1/vaults', p, { sign: true }) }
-  getVault(id) { return this.get(`/api/v1/vaults/${id}`) }
-  getVaultAsset(vid, aid) { return this.get(`/api/v1/vaults/${vid}/assets/${aid}`) }
-  listVaultAssets(vid, q) { return this.get(`/api/v1/vaults/${vid}/assets`, q) }
-  submitVaultProposal(vid, p) { return this.post(`/api/v1/vaults/${vid}/proposals`, p, { sign: true }) }
-  archiveVault(id) { return this.post(`/api/v1/vaults/${id}/archive`, {}, { sign: true }) }
-  restoreVault(id) { return this.post(`/api/v1/vaults/${id}/restore`, {}, { sign: true }) }
-  renameVault(id, name) { return this.put(`/api/v1/vaults/${id}/name`, { name }) }
-  createVaultAddress(vid, p) { return this.post(`/api/v1/vaults/${vid}/addresses`, p, { sign: true }) }
-  listVaultAddresses(vid, q) { return this.get(`/api/v1/vaults/${vid}/addresses`, q) }
-  renameVaultAddress(id, name) { return this.put(`/api/v1/vaults/addresses/${id}/name`, { name }) }
-  exportVaults(q) { return this.get('/api/v1/vaults/export_async', q) }
+  listVaults(q) {
+    return this.get('/api/v1/vaults', q)
+  }
+  createVault(p) {
+    return this.post('/api/v1/vaults', p, { sign: true })
+  }
+  getVault(id) {
+    return this.get(`/api/v1/vaults/${id}`)
+  }
+  getVaultAsset(vid, aid) {
+    return this.get(`/api/v1/vaults/${vid}/assets/${aid}`)
+  }
+  listVaultAssets(vid, q) {
+    return this.get(`/api/v1/vaults/${vid}/assets`, q)
+  }
+  submitVaultProposal(vid, p) {
+    return this.post(`/api/v1/vaults/${vid}/proposals`, p, { sign: true })
+  }
+  archiveVault(id) {
+    return this.post(`/api/v1/vaults/${id}/archive`, {}, { sign: true })
+  }
+  restoreVault(id) {
+    return this.post(`/api/v1/vaults/${id}/restore`, {}, { sign: true })
+  }
+  renameVault(id, name) {
+    return this.put(`/api/v1/vaults/${id}/name`, { name })
+  }
+  createVaultAddress(vid, p) {
+    return this.post(`/api/v1/vaults/${vid}/addresses`, p, { sign: true })
+  }
+  listVaultAddresses(vid, q) {
+    return this.get(`/api/v1/vaults/${vid}/addresses`, q)
+  }
+  renameVaultAddress(id, name) {
+    return this.put(`/api/v1/vaults/addresses/${id}/name`, { name })
+  }
+  exportVaults(q) {
+    return this.get('/api/v1/vaults/export_async', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Vault Groups (1)
   // ---------------------------------------------------------------------------
 
-  listVaultGroups(q) { return this.get('/api/v1/vault-groups', q) }
+  listVaultGroups(q) {
+    return this.get('/api/v1/vault-groups', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Transactions (13 endpoints)
   // ---------------------------------------------------------------------------
 
-  listTransactions(q) { return this.get('/api/v1/transactions', q) }
-  getTransaction(id) { return this.get(`/api/v1/transactions/${id}`) }
-  createTransaction(p) { return this.post('/api/v1/transactions', p, { sign: true }) }
-  createTransfer(p) { return this.post('/api/v1/transactions/transfer', p, { sign: true }) }
-  createTransactionAndWait(p) { return this.post('/api/v1/transactions/create-and-wait', p, { sign: true }) }
-  approveTransaction(id) { return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true }) }
-  abortTransaction(id) { return this.post(`/api/v1/transactions/${id}/abort`, {}, { sign: true }) }
-  releaseTransaction(id) { return this.post(`/api/v1/transactions/${id}/release`, {}, { sign: true }) }
-  predictTransaction(p) { return this.post('/api/v1/transactions/predict', p, { sign: true }) }
-  pushTransaction(id) { return this.post(`/api/v1/transactions/${id}/push`, {}, { sign: true }) }
-  updateSpamState(id, p) { return this.put(`/api/v1/transactions/${id}/update-spam-state`, p) }
-  triggerSigning(id) { return this.post(`/api/v1/transactions/${id}/trigger-signing`, {}, { sign: true }) }
-  exportTransactions(q) { return this.get('/api/v1/transactions/export', q) }
+  listTransactions(q) {
+    return this.get('/api/v1/transactions', q)
+  }
+  getTransaction(id) {
+    return this.get(`/api/v1/transactions/${id}`)
+  }
+  createTransaction(p) {
+    return this.post('/api/v1/transactions', p, { sign: true })
+  }
+  createTransfer(p) {
+    return this.post('/api/v1/transactions/transfer', p, { sign: true })
+  }
+  createTransactionAndWait(p) {
+    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true })
+  }
+  approveTransaction(id) {
+    return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true })
+  }
+  abortTransaction(id) {
+    return this.post(`/api/v1/transactions/${id}/abort`, {}, { sign: true })
+  }
+  releaseTransaction(id) {
+    return this.post(`/api/v1/transactions/${id}/release`, {}, { sign: true })
+  }
+  predictTransaction(p) {
+    return this.post('/api/v1/transactions/predict', p, { sign: true })
+  }
+  pushTransaction(id) {
+    return this.post(`/api/v1/transactions/${id}/push`, {}, { sign: true })
+  }
+  updateSpamState(id, p) {
+    return this.put(`/api/v1/transactions/${id}/update-spam-state`, p)
+  }
+  triggerSigning(id) {
+    return this.post(`/api/v1/transactions/${id}/trigger-signing`, {}, { sign: true })
+  }
+  exportTransactions(q) {
+    return this.get('/api/v1/transactions/export', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Batch Transactions (4)
   // ---------------------------------------------------------------------------
 
-  createBatchTransaction(p) { return this.post('/api/v1/batch-transactions', p, { sign: true }) }
-  predictBatchTransaction(p) { return this.post('/api/v1/batch-transactions/predict', p, { sign: true }) }
-  abortBatchTransaction(id) { return this.post(`/api/v1/batch-transactions/${id}/abort`, {}, { sign: true }) }
-  approveBatchTransaction(id) { return this.post(`/api/v1/batch-transactions/${id}/approve`, {}, { sign: true }) }
+  createBatchTransaction(p) {
+    return this.post('/api/v1/batch-transactions', p, { sign: true })
+  }
+  predictBatchTransaction(p) {
+    return this.post('/api/v1/batch-transactions/predict', p, { sign: true })
+  }
+  abortBatchTransaction(id) {
+    return this.post(`/api/v1/batch-transactions/${id}/abort`, {}, { sign: true })
+  }
+  approveBatchTransaction(id) {
+    return this.post(`/api/v1/batch-transactions/${id}/approve`, {}, { sign: true })
+  }
 
   // ---------------------------------------------------------------------------
   // Swaps (4)
   // ---------------------------------------------------------------------------
 
-  getSwapProviders(chainType) { return this.get(`/api/v1/swaps/providers/${chainType}`) }
-  getSwapQuotes(p) { return this.post('/api/v1/swaps/quotes', p) }
-  createSwap(p) { return this.post('/api/v1/swaps', p, { sign: true }) }
-  predictSwap(p) { return this.post('/api/v1/swaps/predict', p, { sign: true }) }
+  getSwapProviders(chainType) {
+    return this.get(`/api/v1/swaps/providers/${chainType}`)
+  }
+  getSwapQuotes(p) {
+    return this.post('/api/v1/swaps/quotes', p)
+  }
+  createSwap(p) {
+    return this.post('/api/v1/swaps', p, { sign: true })
+  }
+  predictSwap(p) {
+    return this.post('/api/v1/swaps/predict', p, { sign: true })
+  }
 
   // ---------------------------------------------------------------------------
   // Assets (5)
   // ---------------------------------------------------------------------------
 
-  getOwnedAsset(id) { return this.get(`/api/v1/assets/owned-assets/${id}`) }
-  listOwnedAssets(q) { return this.get('/api/v1/assets/owned-assets', q) }
-  updateAssetConfig(p) { return this.put('/api/v1/assets', p) }
-  fetchAssetPrices(p) { return this.post('/api/v1/assets/prices', p) }
-  createAssetInfo(p) { return this.post('/api/v1/assets/asset-infos', p) }
+  getOwnedAsset(id) {
+    return this.get(`/api/v1/assets/owned-assets/${id}`)
+  }
+  listOwnedAssets(q) {
+    return this.get('/api/v1/assets/owned-assets', q)
+  }
+  updateAssetConfig(p) {
+    return this.put('/api/v1/assets', p)
+  }
+  fetchAssetPrices(p) {
+    return this.post('/api/v1/assets/prices', p)
+  }
+  createAssetInfo(p) {
+    return this.post('/api/v1/assets/asset-infos', p)
+  }
 
   // ---------------------------------------------------------------------------
   // Blockchains (2)
   // ---------------------------------------------------------------------------
 
-  listBlockchains() { return this.get('/api/v1/blockchains') }
-  getSuggestedFees(q) { return this.get('/api/v1/blockchains/suggested-fees', q) }
+  listBlockchains() {
+    return this.get('/api/v1/blockchains')
+  }
+  getSuggestedFees(q) {
+    return this.get('/api/v1/blockchains/suggested-fees', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Address Book (5)
   // ---------------------------------------------------------------------------
 
-  createContact(p) { return this.post('/api/v1/addressbook/contacts', p, { sign: true }) }
-  listContacts(q) { return this.get('/api/v1/addressbook/contacts', q) }
-  createBatchContacts(p) { return this.post('/api/v1/addressbook/contacts/batch', p, { sign: true }) }
-  abortContactProposal(pid) { return this.post(`/api/v1/addressbook/contacts/proposals/${pid}/abort`, {}, { sign: true }) }
-  editContact(cid, p) { return this.post(`/api/v1/addressbook/contacts/${cid}/proposals`, p, { sign: true }) }
+  createContact(p) {
+    return this.post('/api/v1/addressbook/contacts', p, { sign: true })
+  }
+  listContacts(q) {
+    return this.get('/api/v1/addressbook/contacts', q)
+  }
+  createBatchContacts(p) {
+    return this.post('/api/v1/addressbook/contacts/batch', p, { sign: true })
+  }
+  abortContactProposal(pid) {
+    return this.post(`/api/v1/addressbook/contacts/proposals/${pid}/abort`, {}, { sign: true })
+  }
+  editContact(cid, p) {
+    return this.post(`/api/v1/addressbook/contacts/${cid}/proposals`, p, { sign: true })
+  }
 
   // ---------------------------------------------------------------------------
   // Users (2)
   // ---------------------------------------------------------------------------
 
-  listUsers(q) { return this.get('/api/v1/users', q) }
-  getUser(id) { return this.get(`/api/v1/users/${id}`) }
+  listUsers(q) {
+    return this.get('/api/v1/users', q)
+  }
+  getUser(id) {
+    return this.get(`/api/v1/users/${id}`)
+  }
 
   // ---------------------------------------------------------------------------
   // User Groups (2)
   // ---------------------------------------------------------------------------
 
-  listUserGroups(q) { return this.get('/api/v1/user-groups', q) }
-  getUserGroup(id) { return this.get(`/api/v1/user-groups/${id}`) }
+  listUserGroups(q) {
+    return this.get('/api/v1/user-groups', q)
+  }
+  getUserGroup(id) {
+    return this.get(`/api/v1/user-groups/${id}`)
+  }
 
   // ---------------------------------------------------------------------------
   // End Users / WaaS (6)
   // ---------------------------------------------------------------------------
 
-  listEndUsers(q) { return this.get('/api/v1/end-users', q) }
-  createEndUser(p) { return this.post('/api/v1/end-users', p) }
-  getCurrentEndUser() { return this.get('/api/v1/end-users/current') }
-  getEndUser(id) { return this.get(`/api/v1/end-users/${id}`) }
-  deleteEndUser(id) { return this.delete(`/api/v1/end-users/${id}`) }
-  setExportKeyPermissions(id, p) { return this.put(`/api/v1/end-users/${id}/set-export-end-user-keys-permissions`, p) }
+  listEndUsers(q) {
+    return this.get('/api/v1/end-users', q)
+  }
+  createEndUser(p) {
+    return this.post('/api/v1/end-users', p)
+  }
+  getCurrentEndUser() {
+    return this.get('/api/v1/end-users/current')
+  }
+  getEndUser(id) {
+    return this.get(`/api/v1/end-users/${id}`)
+  }
+  deleteEndUser(id) {
+    return this.delete(`/api/v1/end-users/${id}`)
+  }
+  setExportKeyPermissions(id, p) {
+    return this.put(`/api/v1/end-users/${id}/set-export-end-user-keys-permissions`, p)
+  }
 
   // ---------------------------------------------------------------------------
   // Authorization Tokens (3)
   // ---------------------------------------------------------------------------
 
-  issueAuthToken(p) { return this.post('/api/v1/authorization-tokens', p) }
-  listAuthTokens(q) { return this.get('/api/v1/authorization-tokens', q) }
-  deleteAuthToken(id) { return this.delete(`/api/v1/authorization-tokens/${id}`) }
+  issueAuthToken(p) {
+    return this.post('/api/v1/authorization-tokens', p)
+  }
+  listAuthTokens(q) {
+    return this.get('/api/v1/authorization-tokens', q)
+  }
+  deleteAuthToken(id) {
+    return this.delete(`/api/v1/authorization-tokens/${id}`)
+  }
 
   // ---------------------------------------------------------------------------
   // Organizations (4)
   // ---------------------------------------------------------------------------
 
-  importKeys(p) { return this.post('/api/v1/organizations/import-keys', p, { sign: true }) }
-  abortImportKeys() { return this.post('/api/v1/organizations/abort-import-keys', {}, { sign: true }) }
-  getImportKeysStatus() { return this.get('/api/v1/organizations/import-keys-status') }
-  listOrgKeys(q) { return this.get('/api/v1/organizations/list-keys', q) }
+  importKeys(p) {
+    return this.post('/api/v1/organizations/import-keys', p, { sign: true })
+  }
+  abortImportKeys() {
+    return this.post('/api/v1/organizations/abort-import-keys', {}, { sign: true })
+  }
+  getImportKeysStatus() {
+    return this.get('/api/v1/organizations/import-keys-status')
+  }
+  listOrgKeys(q) {
+    return this.get('/api/v1/organizations/list-keys', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Webhooks (2)
   // ---------------------------------------------------------------------------
 
-  testWebhook(p) { return this.post('/api/v1/webhooks/test', p) }
-  triggerTransactionWebhook(txId) { return this.post(`/api/v1/webhooks/trigger/transaction/${txId}`) }
+  testWebhook(p) {
+    return this.post('/api/v1/webhooks/test', p)
+  }
+  triggerTransactionWebhook(txId) {
+    return this.post(`/api/v1/webhooks/trigger/transaction/${txId}`)
+  }
 
   // ---------------------------------------------------------------------------
   // Audit Log (2)
   // ---------------------------------------------------------------------------
 
-  listAuditLog(q) { return this.get('/api/v1/audit-log', q) }
-  exportAuditLog(q) { return this.get('/api/v1/audit-log/export', q) }
+  listAuditLog(q) {
+    return this.get('/api/v1/audit-log', q)
+  }
+  exportAuditLog(q) {
+    return this.get('/api/v1/audit-log/export', q)
+  }
 
   // ---------------------------------------------------------------------------
   // Exports (2)
   // ---------------------------------------------------------------------------
 
-  getExport(id) { return this.get(`/api/v1/exports/${id}`) }
-  abortExport(id) { return this.post(`/api/v1/exports/${id}/abort`) }
+  getExport(id) {
+    return this.get(`/api/v1/exports/${id}`)
+  }
+  abortExport(id) {
+    return this.post(`/api/v1/exports/${id}/abort`)
+  }
 
   // ---------------------------------------------------------------------------
   // Enclave Keys (1)
   // ---------------------------------------------------------------------------
 
-  listEnclaveKeys() { return this.get('/api/v1/enclave-keys') }
+  listEnclaveKeys() {
+    return this.get('/api/v1/enclave-keys')
+  }
 }
 
 ;// CONCATENATED MODULE: ./src/index.js
@@ -28260,10 +28486,16 @@ function getClient() {
 function jsonInput(name) {
   const raw = lib_core.getInput(name)
   if (!raw) return undefined
-  try { return JSON.parse(raw) } catch { return raw }
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
 }
 
-function req(name) { return lib_core.getInput(name, { required: true }) }
+function req(name) {
+  return lib_core.getInput(name, { required: true })
+}
 
 function query(...names) {
   const q = {}
@@ -28276,106 +28508,211 @@ function query(...names) {
 
 const router = createCommandRouter({
   // ── Vaults ──────────────────────────────────────────────────────────
-  'list-vaults': async () => setJsonOutput('result', await getClient().listVaults(query('page_size', 'page_token', 'sort_by', 'sort_order'))),
-  'create-vault': async () => setJsonOutput('result', await getClient().createVault(jsonInput('data'))),
+  'list-vaults': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listVaults(query('page_size', 'page_token', 'sort_by', 'sort_order')),
+    ),
+  'create-vault': async () =>
+    setJsonOutput('result', await getClient().createVault(jsonInput('data'))),
   'get-vault': async () => setJsonOutput('result', await getClient().getVault(req('vault-id'))),
-  'get-vault-asset': async () => setJsonOutput('result', await getClient().getVaultAsset(req('vault-id'), req('asset-id'))),
-  'list-vault-assets': async () => setJsonOutput('result', await getClient().listVaultAssets(req('vault-id'), query('page_size', 'page_token'))),
-  'submit-vault-proposal': async () => setJsonOutput('result', await getClient().submitVaultProposal(req('vault-id'), jsonInput('data'))),
-  'archive-vault': async () => setJsonOutput('result', await getClient().archiveVault(req('vault-id'))),
-  'restore-vault': async () => setJsonOutput('result', await getClient().restoreVault(req('vault-id'))),
-  'rename-vault': async () => setJsonOutput('result', await getClient().renameVault(req('vault-id'), req('name'))),
-  'create-vault-address': async () => setJsonOutput('result', await getClient().createVaultAddress(req('vault-id'), jsonInput('data'))),
-  'list-vault-addresses': async () => setJsonOutput('result', await getClient().listVaultAddresses(req('vault-id'), query('page_size', 'page_token'))),
-  'rename-vault-address': async () => setJsonOutput('result', await getClient().renameVaultAddress(req('address-id'), req('name'))),
-  'export-vaults': async () => setJsonOutput('result', await getClient().exportVaults(query('format'))),
+  'get-vault-asset': async () =>
+    setJsonOutput('result', await getClient().getVaultAsset(req('vault-id'), req('asset-id'))),
+  'list-vault-assets': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listVaultAssets(req('vault-id'), query('page_size', 'page_token')),
+    ),
+  'submit-vault-proposal': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().submitVaultProposal(req('vault-id'), jsonInput('data')),
+    ),
+  'archive-vault': async () =>
+    setJsonOutput('result', await getClient().archiveVault(req('vault-id'))),
+  'restore-vault': async () =>
+    setJsonOutput('result', await getClient().restoreVault(req('vault-id'))),
+  'rename-vault': async () =>
+    setJsonOutput('result', await getClient().renameVault(req('vault-id'), req('name'))),
+  'create-vault-address': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().createVaultAddress(req('vault-id'), jsonInput('data')),
+    ),
+  'list-vault-addresses': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listVaultAddresses(req('vault-id'), query('page_size', 'page_token')),
+    ),
+  'rename-vault-address': async () =>
+    setJsonOutput('result', await getClient().renameVaultAddress(req('address-id'), req('name'))),
+  'export-vaults': async () =>
+    setJsonOutput('result', await getClient().exportVaults(query('format'))),
 
   // ── Vault Groups ────────────────────────────────────────────────────
-  'list-vault-groups': async () => setJsonOutput('result', await getClient().listVaultGroups(query('page_size', 'page_token'))),
+  'list-vault-groups': async () =>
+    setJsonOutput('result', await getClient().listVaultGroups(query('page_size', 'page_token'))),
 
   // ── Transactions ────────────────────────────────────────────────────
-  'list-transactions': async () => setJsonOutput('result', await getClient().listTransactions(query('page_size', 'page_token', 'sort_by', 'sort_order', 'vault_id', 'state', 'type'))),
-  'get-transaction': async () => setJsonOutput('result', await getClient().getTransaction(req('transaction-id'))),
-  'create-transaction': async () => setJsonOutput('result', await getClient().createTransaction(jsonInput('data'))),
-  'create-transfer': async () => setJsonOutput('result', await getClient().createTransfer(jsonInput('data'))),
-  'create-transaction-and-wait': async () => setJsonOutput('result', await getClient().createTransactionAndWait(jsonInput('data'))),
-  'approve-transaction': async () => setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),
-  'abort-transaction': async () => setJsonOutput('result', await getClient().abortTransaction(req('transaction-id'))),
-  'release-transaction': async () => setJsonOutput('result', await getClient().releaseTransaction(req('transaction-id'))),
-  'predict-transaction': async () => setJsonOutput('result', await getClient().predictTransaction(jsonInput('data'))),
-  'push-transaction': async () => setJsonOutput('result', await getClient().pushTransaction(req('transaction-id'))),
-  'update-spam-state': async () => setJsonOutput('result', await getClient().updateSpamState(req('transaction-id'), jsonInput('data'))),
-  'trigger-signing': async () => setJsonOutput('result', await getClient().triggerSigning(req('transaction-id'))),
-  'export-transactions': async () => setJsonOutput('result', await getClient().exportTransactions(query('format', 'start_date', 'end_date'))),
+  'list-transactions': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listTransactions(
+        query('page_size', 'page_token', 'sort_by', 'sort_order', 'vault_id', 'state', 'type'),
+      ),
+    ),
+  'get-transaction': async () =>
+    setJsonOutput('result', await getClient().getTransaction(req('transaction-id'))),
+  'create-transaction': async () =>
+    setJsonOutput('result', await getClient().createTransaction(jsonInput('data'))),
+  'create-transfer': async () =>
+    setJsonOutput('result', await getClient().createTransfer(jsonInput('data'))),
+  'create-transaction-and-wait': async () =>
+    setJsonOutput('result', await getClient().createTransactionAndWait(jsonInput('data'))),
+  'approve-transaction': async () =>
+    setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),
+  'abort-transaction': async () =>
+    setJsonOutput('result', await getClient().abortTransaction(req('transaction-id'))),
+  'release-transaction': async () =>
+    setJsonOutput('result', await getClient().releaseTransaction(req('transaction-id'))),
+  'predict-transaction': async () =>
+    setJsonOutput('result', await getClient().predictTransaction(jsonInput('data'))),
+  'push-transaction': async () =>
+    setJsonOutput('result', await getClient().pushTransaction(req('transaction-id'))),
+  'update-spam-state': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().updateSpamState(req('transaction-id'), jsonInput('data')),
+    ),
+  'trigger-signing': async () =>
+    setJsonOutput('result', await getClient().triggerSigning(req('transaction-id'))),
+  'export-transactions': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().exportTransactions(query('format', 'start_date', 'end_date')),
+    ),
 
   // ── Batch Transactions ──────────────────────────────────────────────
-  'create-batch-transaction': async () => setJsonOutput('result', await getClient().createBatchTransaction(jsonInput('data'))),
-  'predict-batch-transaction': async () => setJsonOutput('result', await getClient().predictBatchTransaction(jsonInput('data'))),
-  'abort-batch-transaction': async () => setJsonOutput('result', await getClient().abortBatchTransaction(req('batch-id'))),
-  'approve-batch-transaction': async () => setJsonOutput('result', await getClient().approveBatchTransaction(req('batch-id'))),
+  'create-batch-transaction': async () =>
+    setJsonOutput('result', await getClient().createBatchTransaction(jsonInput('data'))),
+  'predict-batch-transaction': async () =>
+    setJsonOutput('result', await getClient().predictBatchTransaction(jsonInput('data'))),
+  'abort-batch-transaction': async () =>
+    setJsonOutput('result', await getClient().abortBatchTransaction(req('batch-id'))),
+  'approve-batch-transaction': async () =>
+    setJsonOutput('result', await getClient().approveBatchTransaction(req('batch-id'))),
 
   // ── Swaps ───────────────────────────────────────────────────────────
-  'get-swap-providers': async () => setJsonOutput('result', await getClient().getSwapProviders(req('chain-type'))),
-  'get-swap-quotes': async () => setJsonOutput('result', await getClient().getSwapQuotes(jsonInput('data'))),
-  'create-swap': async () => setJsonOutput('result', await getClient().createSwap(jsonInput('data'))),
-  'predict-swap': async () => setJsonOutput('result', await getClient().predictSwap(jsonInput('data'))),
+  'get-swap-providers': async () =>
+    setJsonOutput('result', await getClient().getSwapProviders(req('chain-type'))),
+  'get-swap-quotes': async () =>
+    setJsonOutput('result', await getClient().getSwapQuotes(jsonInput('data'))),
+  'create-swap': async () =>
+    setJsonOutput('result', await getClient().createSwap(jsonInput('data'))),
+  'predict-swap': async () =>
+    setJsonOutput('result', await getClient().predictSwap(jsonInput('data'))),
 
   // ── Assets ──────────────────────────────────────────────────────────
-  'get-owned-asset': async () => setJsonOutput('result', await getClient().getOwnedAsset(req('asset-id'))),
-  'list-owned-assets': async () => setJsonOutput('result', await getClient().listOwnedAssets(query('page_size', 'page_token'))),
-  'update-asset-config': async () => setJsonOutput('result', await getClient().updateAssetConfig(jsonInput('data'))),
-  'fetch-asset-prices': async () => setJsonOutput('result', await getClient().fetchAssetPrices(jsonInput('data'))),
-  'create-asset-info': async () => setJsonOutput('result', await getClient().createAssetInfo(jsonInput('data'))),
+  'get-owned-asset': async () =>
+    setJsonOutput('result', await getClient().getOwnedAsset(req('asset-id'))),
+  'list-owned-assets': async () =>
+    setJsonOutput('result', await getClient().listOwnedAssets(query('page_size', 'page_token'))),
+  'update-asset-config': async () =>
+    setJsonOutput('result', await getClient().updateAssetConfig(jsonInput('data'))),
+  'fetch-asset-prices': async () =>
+    setJsonOutput('result', await getClient().fetchAssetPrices(jsonInput('data'))),
+  'create-asset-info': async () =>
+    setJsonOutput('result', await getClient().createAssetInfo(jsonInput('data'))),
 
   // ── Blockchains ─────────────────────────────────────────────────────
   'list-blockchains': async () => setJsonOutput('result', await getClient().listBlockchains()),
-  'get-suggested-fees': async () => setJsonOutput('result', await getClient().getSuggestedFees(query('chain_type', 'chain_unique_id'))),
+  'get-suggested-fees': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().getSuggestedFees(query('chain_type', 'chain_unique_id')),
+    ),
 
   // ── Address Book ────────────────────────────────────────────────────
-  'create-contact': async () => setJsonOutput('result', await getClient().createContact(jsonInput('data'))),
-  'list-contacts': async () => setJsonOutput('result', await getClient().listContacts(query('page_size', 'page_token', 'search'))),
-  'create-batch-contacts': async () => setJsonOutput('result', await getClient().createBatchContacts(jsonInput('data'))),
-  'abort-contact-proposal': async () => setJsonOutput('result', await getClient().abortContactProposal(req('proposal-id'))),
-  'edit-contact': async () => setJsonOutput('result', await getClient().editContact(req('contact-id'), jsonInput('data'))),
+  'create-contact': async () =>
+    setJsonOutput('result', await getClient().createContact(jsonInput('data'))),
+  'list-contacts': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listContacts(query('page_size', 'page_token', 'search')),
+    ),
+  'create-batch-contacts': async () =>
+    setJsonOutput('result', await getClient().createBatchContacts(jsonInput('data'))),
+  'abort-contact-proposal': async () =>
+    setJsonOutput('result', await getClient().abortContactProposal(req('proposal-id'))),
+  'edit-contact': async () =>
+    setJsonOutput('result', await getClient().editContact(req('contact-id'), jsonInput('data'))),
 
   // ── Users ───────────────────────────────────────────────────────────
-  'list-users': async () => setJsonOutput('result', await getClient().listUsers(query('page_size', 'page_token'))),
+  'list-users': async () =>
+    setJsonOutput('result', await getClient().listUsers(query('page_size', 'page_token'))),
   'get-user': async () => setJsonOutput('result', await getClient().getUser(req('user-id'))),
 
   // ── User Groups ─────────────────────────────────────────────────────
-  'list-user-groups': async () => setJsonOutput('result', await getClient().listUserGroups(query('page_size', 'page_token'))),
-  'get-user-group': async () => setJsonOutput('result', await getClient().getUserGroup(req('group-id'))),
+  'list-user-groups': async () =>
+    setJsonOutput('result', await getClient().listUserGroups(query('page_size', 'page_token'))),
+  'get-user-group': async () =>
+    setJsonOutput('result', await getClient().getUserGroup(req('group-id'))),
 
   // ── End Users (WaaS) ───────────────────────────────────────────────
-  'list-end-users': async () => setJsonOutput('result', await getClient().listEndUsers(query('page_size', 'page_token'))),
-  'create-end-user': async () => setJsonOutput('result', await getClient().createEndUser(jsonInput('data'))),
-  'get-current-end-user': async () => setJsonOutput('result', await getClient().getCurrentEndUser()),
+  'list-end-users': async () =>
+    setJsonOutput('result', await getClient().listEndUsers(query('page_size', 'page_token'))),
+  'create-end-user': async () =>
+    setJsonOutput('result', await getClient().createEndUser(jsonInput('data'))),
+  'get-current-end-user': async () =>
+    setJsonOutput('result', await getClient().getCurrentEndUser()),
   'get-end-user': async () => setJsonOutput('result', await getClient().getEndUser(req('user-id'))),
-  'delete-end-user': async () => setJsonOutput('result', await getClient().deleteEndUser(req('user-id'))),
-  'set-export-key-permissions': async () => setJsonOutput('result', await getClient().setExportKeyPermissions(req('user-id'), jsonInput('data'))),
+  'delete-end-user': async () =>
+    setJsonOutput('result', await getClient().deleteEndUser(req('user-id'))),
+  'set-export-key-permissions': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().setExportKeyPermissions(req('user-id'), jsonInput('data')),
+    ),
 
   // ── Authorization Tokens ───────────────────────────────────────────
-  'issue-auth-token': async () => setJsonOutput('result', await getClient().issueAuthToken(jsonInput('data'))),
-  'list-auth-tokens': async () => setJsonOutput('result', await getClient().listAuthTokens(query('page_size', 'page_token'))),
-  'delete-auth-token': async () => setJsonOutput('result', await getClient().deleteAuthToken(req('token-id'))),
+  'issue-auth-token': async () =>
+    setJsonOutput('result', await getClient().issueAuthToken(jsonInput('data'))),
+  'list-auth-tokens': async () =>
+    setJsonOutput('result', await getClient().listAuthTokens(query('page_size', 'page_token'))),
+  'delete-auth-token': async () =>
+    setJsonOutput('result', await getClient().deleteAuthToken(req('token-id'))),
 
   // ── Organizations ──────────────────────────────────────────────────
-  'import-keys': async () => setJsonOutput('result', await getClient().importKeys(jsonInput('data'))),
+  'import-keys': async () =>
+    setJsonOutput('result', await getClient().importKeys(jsonInput('data'))),
   'abort-import-keys': async () => setJsonOutput('result', await getClient().abortImportKeys()),
-  'get-import-keys-status': async () => setJsonOutput('result', await getClient().getImportKeysStatus()),
-  'list-org-keys': async () => setJsonOutput('result', await getClient().listOrgKeys(query('page_size', 'page_token'))),
+  'get-import-keys-status': async () =>
+    setJsonOutput('result', await getClient().getImportKeysStatus()),
+  'list-org-keys': async () =>
+    setJsonOutput('result', await getClient().listOrgKeys(query('page_size', 'page_token'))),
 
   // ── Webhooks ───────────────────────────────────────────────────────
-  'test-webhook': async () => setJsonOutput('result', await getClient().testWebhook(jsonInput('data'))),
-  'trigger-transaction-webhook': async () => setJsonOutput('result', await getClient().triggerTransactionWebhook(req('transaction-id'))),
+  'test-webhook': async () =>
+    setJsonOutput('result', await getClient().testWebhook(jsonInput('data'))),
+  'trigger-transaction-webhook': async () =>
+    setJsonOutput('result', await getClient().triggerTransactionWebhook(req('transaction-id'))),
 
   // ── Audit Log ──────────────────────────────────────────────────────
-  'list-audit-log': async () => setJsonOutput('result', await getClient().listAuditLog(query('page_size', 'page_token', 'start_date', 'end_date'))),
-  'export-audit-log': async () => setJsonOutput('result', await getClient().exportAuditLog(query('format', 'start_date', 'end_date'))),
+  'list-audit-log': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().listAuditLog(query('page_size', 'page_token', 'start_date', 'end_date')),
+    ),
+  'export-audit-log': async () =>
+    setJsonOutput(
+      'result',
+      await getClient().exportAuditLog(query('format', 'start_date', 'end_date')),
+    ),
 
   // ── Exports ────────────────────────────────────────────────────────
   'get-export': async () => setJsonOutput('result', await getClient().getExport(req('export-id'))),
-  'abort-export': async () => setJsonOutput('result', await getClient().abortExport(req('export-id'))),
+  'abort-export': async () =>
+    setJsonOutput('result', await getClient().abortExport(req('export-id'))),
 
   // ── Enclave Keys ───────────────────────────────────────────────────
   'list-enclave-keys': async () => setJsonOutput('result', await getClient().listEnclaveKeys()),

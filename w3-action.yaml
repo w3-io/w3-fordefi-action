@@ -28,7 +28,8 @@ commands:
   - name: create-vault
     description: Create a new MPC vault (requires signing)
     inputs:
-      data: { type: string, required: true, description: "JSON vault config (name, type, key_type)" }
+      data:
+        { type: string, required: true, description: 'JSON vault config (name, type, key_type)' }
 
   - name: get-vault
     description: Get vault details
@@ -44,13 +45,18 @@ commands:
     description: Create a new blockchain address in a vault (requires signing)
     inputs:
       vault-id: { type: string, required: true, description: Vault ID }
-      data: { type: string, required: true, description: "JSON address config (chain, name)" }
+      data: { type: string, required: true, description: 'JSON address config (chain, name)' }
 
   # ── Transactions ──────────────────────────────────────────────────
   - name: create-transaction
     description: Create a multi-chain transaction (requires signing)
     inputs:
-      data: { type: string, required: true, description: "JSON transaction payload (vault_id, type, details)" }
+      data:
+        {
+          type: string,
+          required: true,
+          description: 'JSON transaction payload (vault_id, type, details)',
+        }
 
   - name: create-transfer
     description: Simplified transfer shortcut (requires signing)
@@ -101,4 +107,4 @@ commands:
   - name: get-suggested-fees
     description: Get fee suggestions for a chain
     inputs:
-      chain_type: { type: string, required: false, description: "Chain type (evm, solana, etc.)" }
+      chain_type: { type: string, required: false, description: 'Chain type (evm, solana, etc.)' }

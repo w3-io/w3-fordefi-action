@@ -1,7 +1,21 @@
 ---
 title: ForDefi Integration
 category: integrations
-actions: [list-vaults, create-vault, get-vault, create-transaction, create-transfer, predict-transaction, approve-transaction, list-blockchains, get-swap-quotes, create-swap, list-contacts, list-end-users]
+actions:
+  [
+    list-vaults,
+    create-vault,
+    get-vault,
+    create-transaction,
+    create-transfer,
+    predict-transaction,
+    approve-transaction,
+    list-blockchains,
+    get-swap-quotes,
+    create-swap,
+    list-contacts,
+    list-end-users,
+  ]
 complexity: intermediate
 ---
 
@@ -320,15 +334,15 @@ steps:
 
 The action throws `W3ActionError` with structured codes:
 
-| Code | Meaning |
-|------|---------|
-| `MISSING_ACCESS_TOKEN` | Access token not provided |
-| `MISSING_PRIVATE_KEY` | Private key needed for transactional command |
-| `BRIDGE_ERROR` | ForDefi API returned an error |
+| Code                   | Meaning                                      |
+| ---------------------- | -------------------------------------------- |
+| `MISSING_ACCESS_TOKEN` | Access token not provided                    |
+| `MISSING_PRIVATE_KEY`  | Private key needed for transactional command |
+| `BRIDGE_ERROR`         | ForDefi API returned an error                |
 
 ## Environments
 
-| Environment | `api-url` |
-|-------------|-----------|
-| Production | `https://api.fordefi.com` (default) |
-| Sandbox | `https://api.sandbox.fordefi.com` |
+| Environment | `api-url`                           |
+| ----------- | ----------------------------------- |
+| Production  | `https://api.fordefi.com` (default) |
+| Sandbox     | `https://api.sandbox.fordefi.com`   |

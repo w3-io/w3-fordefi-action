@@ -14,6 +14,17 @@
 import { createSign } from 'node:crypto'
 import { W3ActionError } from '@w3-io/action-core'
 
+let _bridge = null
+
+/**
+ * Set a bridge function for P-256 signing via the W3 bridge.
+ * When set, the client delegates signing to the bridge instead of
+ * using a local PEM key — the key never enters the container.
+ */
+export function setBridgeSigner(bridgeFn) {
+  _bridge = bridgeFn
+}
+
 const DEFAULT_BASE_URL = 'https://api.fordefi.com'
 const TIMEOUT_MS = 30_000
 const MAX_RETRIES = 3
@@ -54,15 +65,17 @@ export class ForDefiClient {
   /**
    * @param {object} opts
    * @param {string} opts.accessToken — JWT from API User creation
-   * @param {string} [opts.privateKey] — PEM-encoded P-256 key for request signing
+   * @param {string} [opts.privateKey] — PEM-encoded P-256 key for local request signing
+   * @param {string} [opts.signingKeyName] — Bridge secret name for bridge-side signing
    * @param {string} [opts.baseUrl]
    */
-  constructor({ accessToken, privateKey, baseUrl = DEFAULT_BASE_URL } = {}) {
+  constructor({ accessToken, privateKey, signingKeyName, baseUrl = DEFAULT_BASE_URL } = {}) {
     if (!accessToken) {
       throw new W3ActionError('MISSING_ACCESS_TOKEN', 'ForDefi access token is required')
     }
     this.accessToken = accessToken
     this.privateKey = privateKey || null
+    this.signingKeyName = signingKeyName || null
     this.baseUrl = baseUrl.replace(/\/+$/, '')
   }
 
@@ -106,9 +119,9 @@ export class ForDefiClient {
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
 
     if (sign) {
-      this.#requirePrivateKey()
+      this.#requireSigner()
       const timestamp = Date.now().toString()
-      headers['x-signature'] = this.#sign(path, timestamp, jsonBody || '')
+      headers['x-signature'] = await this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }
 
@@ -120,9 +133,9 @@ export class ForDefiClient {
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
 
     if (sign) {
-      this.#requirePrivateKey()
+      this.#requireSigner()
       const timestamp = Date.now().toString()
-      headers['x-signature'] = this.#sign(path, timestamp, jsonBody || '')
+      headers['x-signature'] = await this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }
 
@@ -137,20 +150,39 @@ export class ForDefiClient {
   // ECDSA P-256 request signing
   // ---------------------------------------------------------------------------
 
-  /** Sign `{path}|{timestamp}|{body}` with P-256/SHA-256, return base64. */
-  #sign(path, timestamp, body) {
+  /**
+   * Sign `{path}|{timestamp}|{body}` with P-256/SHA-256, return base64.
+   *
+   * Two modes:
+   *   - Bridge mode (signingKeyName set): delegates to bridge /crypto/p256-sign.
+   *     The PEM key stays bridge-side; the container never sees it.
+   *   - Local mode (privateKey set): signs in-process with node:crypto.
+   */
+  async #sign(path, timestamp, body) {
+    const message = `${path}|${timestamp}|${body}`
+
+    // Bridge mode: delegate signing to the W3 bridge
+    if (this.signingKeyName && _bridge) {
+      const result = await _bridge('crypto', 'p256-sign', {
+        keyName: this.signingKeyName,
+        message,
+      })
+      return result.signature || result.result?.signature
+    }
+
+    // Local mode: sign with the PEM key in-process
     const signer = createSign('SHA256')
-    signer.update(`${path}|${timestamp}|${body}`)
+    signer.update(message)
     signer.end()
     return signer.sign(this.privateKey, 'base64')
   }
 
-  #requirePrivateKey() {
-    if (!this.privateKey) {
+  #requireSigner() {
+    if (!this.privateKey && !(this.signingKeyName && _bridge)) {
       throw new W3ActionError(
-        'MISSING_PRIVATE_KEY',
-        'ForDefi private key required for transactional operations. ' +
-          'Set private-key input with your PEM-encoded P-256 key.',
+        'MISSING_SIGNER',
+        'ForDefi signing requires either private-key (local PEM) or ' +
+          'signing-key-name (bridge-side secret). Set one of these inputs.',
       )
     }
   }

@@ -163,7 +163,7 @@ export class ForDefiClient {
 
     // Bridge mode: delegate signing to the W3 bridge
     if (this.signingKeyName && _bridge) {
-      const result = await _bridge('crypto', 'p256-sign', {
+      const result = await _bridge('p256-sign', {
         keyName: this.signingKeyName,
         message,
       })

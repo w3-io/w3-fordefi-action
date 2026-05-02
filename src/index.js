@@ -5,14 +5,20 @@
  * and organizational key management.
  */
 
-import { createCommandRouter, setJsonOutput } from '@w3-io/action-core'
+import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
-import { ForDefiClient } from './client.js'
+import { ForDefiClient, setBridgeSigner } from './client.js'
+
+// If a bridge is available, wire it up for P-256 signing
+if (bridge) {
+  setBridgeSigner(bridge.crypto || bridge.chain)
+}
 
 function getClient() {
   return new ForDefiClient({
     accessToken: core.getInput('access-token', { required: true }),
     privateKey: core.getInput('private-key') || undefined,
+    signingKeyName: core.getInput('signing-key-name') || undefined,
     baseUrl: core.getInput('api-url') || undefined,
   })
 }

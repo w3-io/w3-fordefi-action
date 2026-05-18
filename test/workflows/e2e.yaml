@@ -1,0 +1,106 @@
+# E2E Test Workflow — ForDefi
+#
+# Prerequisites:
+#   - FORDEFI_API_TOKEN — JWT access token from ForDefi API user
+#   - FORDEFI_PRIVATE_KEY — PEM-encoded P-256 private key for
+#     signing transactional commands (create-vault-address,
+#     create-transaction, approve-transaction, abort-transaction)
+#
+# Note: Secret names shown here are illustrative — consumers can
+# name their secrets however they like. The fixed contract is the
+# action input names (`access-token`, `private-key`, `vault-id`).
+#
+# SKIP: create-vault and create-swap are not exercised here because
+# they require pre-provisioned organization permissions and funded
+# vaults. abort-transaction is exercised against the freshly
+# created transaction to keep the test idempotent.
+
+name: fordefi-e2e
+on:
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List vaults
+        id: list_vaults
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: list-vaults
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+
+      - name: Extract first vault ID
+        id: vault
+        run: |
+          echo "id=$(echo '${{ steps.list_vaults.outputs.result }}' | jq -r '.vaults[0].id')" >> "$GITHUB_OUTPUT"
+
+      - name: Get the vault
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: get-vault
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          vault-id: ${{ steps.vault.outputs.id }}
+
+      - name: List vault assets
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: list-vault-assets
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          vault-id: ${{ steps.vault.outputs.id }}
+
+      - name: List supported blockchains
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: list-blockchains
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+
+      - name: Get suggested fees (evm)
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: get-suggested-fees
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          chain_type: evm
+
+      - name: Predict a transaction
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: predict-transaction
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          data: '{"vault_id":"${{ steps.vault.outputs.id }}","type":"evm_transaction","details":{"type":"evm_raw_transaction","chain":"evm_ethereum_mainnet","gas":{"type":"priority","priority":"medium"},"to":"0x0000000000000000000000000000000000000000","value":"0"}}'
+
+      - name: Create a transaction
+        id: create_tx
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: create-transaction
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          private-key: ${{ secrets.FORDEFI_PRIVATE_KEY }}
+          data: '{"vault_id":"${{ steps.vault.outputs.id }}","type":"evm_transaction","details":{"type":"evm_raw_transaction","chain":"evm_ethereum_mainnet","gas":{"type":"priority","priority":"medium"},"to":"0x0000000000000000000000000000000000000000","value":"0"}}'
+
+      - name: Extract transaction ID
+        id: tx
+        run: |
+          echo "id=$(echo '${{ steps.create_tx.outputs.result }}' | jq -r '.id')" >> "$GITHUB_OUTPUT"
+
+      - name: Get the transaction
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: get-transaction
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          transaction-id: ${{ steps.tx.outputs.id }}
+
+      - name: List transactions for vault
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: list-transactions
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          vault_id: ${{ steps.vault.outputs.id }}
+
+      - name: Abort the pending transaction
+        uses: w3-io/w3-fordefi-action@v0
+        with:
+          command: abort-transaction
+          access-token: ${{ secrets.FORDEFI_API_TOKEN }}
+          private-key: ${{ secrets.FORDEFI_PRIVATE_KEY }}
+          transaction-id: ${{ steps.tx.outputs.id }}

@@ -1,5 +1,5 @@
 kind: integration
-partner: ForDefi
+partner: fordefi
 name: ForDefi MPC Custody
 version: 1.0.0
 repo: w3-io/w3-fordefi-action
@@ -18,93 +18,248 @@ context: >
   need custody controls, audit trails, or the policy engine.
 
 commands:
-  # ── Vaults ────────────────────────────────────────────────────────
+  # -- Vaults ----------------------------------------------------------------
+
   - name: list-vaults
-    description: List all vaults in the organization
+    description: >
+      List all vaults in the organization. Use to discover vault IDs
+      before calling vault-scoped commands like create-transaction.
     inputs:
-      page_size: { type: number, required: false, description: Results per page }
-      page_token: { type: string, required: false, description: Pagination token }
+      page_size:
+        type: string
+        required: false
+        description: Results per page
+      page_token:
+        type: string
+        required: false
+        description: Pagination token
+    outputs:
+      result:
+        type: object
+        description: '{vaults: [{id, name, type, ...}], page: {...}}'
 
   - name: create-vault
-    description: Create a new MPC vault (requires signing)
+    description: >
+      Create a new MPC vault. Vault creation is a signed operation —
+      requires the PEM private key to be configured.
     inputs:
       data:
-        { type: string, required: true, description: 'JSON vault config (name, type, key_type)' }
+        type: string
+        required: true
+        description: 'JSON vault config (name, type, key_type)'
+    outputs:
+      result:
+        type: object
+        description: '{id, name, type, key_type, state, ...}'
 
   - name: get-vault
-    description: Get vault details
+    description: Get vault details by ID, including type and current state.
     inputs:
-      vault-id: { type: string, required: true, description: Vault ID }
+      vault-id:
+        type: string
+        required: true
+        description: Vault ID
+    outputs:
+      result:
+        type: object
+        description: '{id, name, type, key_type, state, ...}'
 
   - name: list-vault-assets
-    description: List all assets in a vault
+    description: List all assets held in a vault with current balances.
     inputs:
-      vault-id: { type: string, required: true, description: Vault ID }
+      vault-id:
+        type: string
+        required: true
+        description: Vault ID
+    outputs:
+      result:
+        type: object
+        description: '{assets: [{asset, balance, ...}]}'
 
   - name: create-vault-address
-    description: Create a new blockchain address in a vault (requires signing)
+    description: >
+      Create a new blockchain address in a vault. Signed operation —
+      requires the PEM private key. Use to add new chain receive
+      addresses to an existing vault.
     inputs:
-      vault-id: { type: string, required: true, description: Vault ID }
-      data: { type: string, required: true, description: 'JSON address config (chain, name)' }
+      vault-id:
+        type: string
+        required: true
+        description: Vault ID
+      data:
+        type: string
+        required: true
+        description: 'JSON address config (chain, name)'
+    outputs:
+      result:
+        type: object
+        description: '{id, address, chain, name, ...}'
 
-  # ── Transactions ──────────────────────────────────────────────────
+  # -- Transactions ----------------------------------------------------------
+
   - name: create-transaction
-    description: Create a multi-chain transaction (requires signing)
+    description: >
+      Create a multi-chain transaction in a ForDefi vault. Signed
+      operation — requires the PEM private key. Transaction enters
+      policy review before being broadcast. Pair with get-transaction
+      to poll for completion.
     inputs:
       data:
-        {
-          type: string,
-          required: true,
-          description: 'JSON transaction payload (vault_id, type, details)',
-        }
+        type: string
+        required: true
+        description: 'JSON transaction payload (vault_id, type, details)'
+    outputs:
+      result:
+        type: object
+        description: '{id, state, type, vault_id, ...}'
 
   - name: create-transfer
-    description: Simplified transfer shortcut (requires signing)
+    description: >
+      Simplified transfer shortcut for moving assets between addresses.
+      Signed operation — requires the PEM private key. Convenience
+      wrapper over create-transaction for the common transfer case.
     inputs:
-      data: { type: string, required: true, description: JSON transfer payload }
+      data:
+        type: string
+        required: true
+        description: JSON transfer payload
+    outputs:
+      result:
+        type: object
+        description: '{id, state, type, ...}'
 
   - name: predict-transaction
-    description: Simulate transaction — fees, effects, revert detection, risk screening, policy matching
+    description: >
+      Simulate a transaction before submitting — returns fee estimate,
+      effect prediction, revert detection, risk screening, and policy
+      match results. Always run before create-transaction on risky
+      flows to avoid burning a slot in the approval queue.
     inputs:
-      data: { type: string, required: true, description: JSON transaction payload to simulate }
+      data:
+        type: string
+        required: true
+        description: JSON transaction payload to simulate
+    outputs:
+      result:
+        type: object
+        description: '{fees, effects, revert, risk, policy_match, ...}'
 
   - name: approve-transaction
-    description: Approve a pending transaction (requires signing)
+    description: >
+      Approve a pending transaction awaiting policy review. Signed
+      operation — requires the PEM private key. Use after a
+      create-transaction call returns a pending state.
     inputs:
-      transaction-id: { type: string, required: true, description: Transaction ID }
+      transaction-id:
+        type: string
+        required: true
+        description: Transaction ID
+    outputs:
+      result:
+        type: object
+        description: '{id, state, ...}'
 
   - name: abort-transaction
-    description: Abort a pending transaction (requires signing)
+    description: >
+      Abort a pending transaction before it broadcasts. Signed
+      operation — requires the PEM private key. Irreversible once the
+      transaction has moved past the abortable state.
     inputs:
-      transaction-id: { type: string, required: true, description: Transaction ID }
+      transaction-id:
+        type: string
+        required: true
+        description: Transaction ID
+    outputs:
+      result:
+        type: object
+        description: '{id, state, ...}'
 
   - name: get-transaction
-    description: Get transaction details and status
+    description: >
+      Get transaction details and current state. Poll this after
+      create-transaction to detect completion or failure.
     inputs:
-      transaction-id: { type: string, required: true, description: Transaction ID }
+      transaction-id:
+        type: string
+        required: true
+        description: Transaction ID
+    outputs:
+      result:
+        type: object
+        description: '{id, state, type, vault_id, signatures, ...}'
 
   - name: list-transactions
-    description: List transactions with optional filters
+    description: >
+      List transactions with optional vault and state filters. Use to
+      audit history or discover transaction IDs by state.
     inputs:
-      vault_id: { type: string, required: false, description: Filter by vault }
-      state: { type: string, required: false, description: Filter by state }
+      vault_id:
+        type: string
+        required: false
+        description: Filter by vault
+      state:
+        type: string
+        required: false
+        description: Filter by state
+    outputs:
+      result:
+        type: object
+        description: '{transactions: [{id, state, ...}], page: {...}}'
 
-  # ── Swaps ─────────────────────────────────────────────────────────
+  # -- Swaps -----------------------------------------------------------------
+
   - name: get-swap-quotes
-    description: Get swap quotes from available providers
+    description: >
+      Get swap quotes from available DEX/aggregator providers. Call
+      before create-swap to compare execution prices.
     inputs:
-      data: { type: string, required: true, description: JSON swap quote request }
+      data:
+        type: string
+        required: true
+        description: JSON swap quote request
+    outputs:
+      result:
+        type: object
+        description: '{quotes: [{provider, price, fees, ...}]}'
 
   - name: create-swap
-    description: Execute a token swap (requires signing)
+    description: >
+      Execute a token swap on the chosen provider. Signed operation —
+      requires the PEM private key. Pair with get-swap-quotes to pick
+      a route first.
     inputs:
-      data: { type: string, required: true, description: JSON swap execution payload }
+      data:
+        type: string
+        required: true
+        description: JSON swap execution payload
+    outputs:
+      result:
+        type: object
+        description: '{id, state, ...}'
 
-  # ── Blockchains ───────────────────────────────────────────────────
+  # -- Blockchains -----------------------------------------------------------
+
   - name: list-blockchains
-    description: List all supported blockchains
+    description: >
+      List all blockchains supported by ForDefi with chain types and
+      identifiers. Use to discover valid chain values for other
+      commands.
+    inputs: {}
+    outputs:
+      result:
+        type: object
+        description: '{blockchains: [{name, chain_type, unique_id, ...}]}'
 
   - name: get-suggested-fees
-    description: Get fee suggestions for a chain
+    description: >
+      Get fee suggestions for a chain — useful for previewing gas
+      costs before building a transaction payload.
     inputs:
-      chain_type: { type: string, required: false, description: 'Chain type (evm, solana, etc.)' }
+      chain_type:
+        type: string
+        required: false
+        description: 'Chain type (evm, solana, etc.)'
+    outputs:
+      result:
+        type: object
+        description: '{low, medium, high, ...}'

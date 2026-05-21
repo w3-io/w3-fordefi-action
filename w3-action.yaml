@@ -263,3 +263,65 @@ commands:
       result:
         type: object
         description: '{low, medium, high, ...}'
+
+# ── Display metadata for W3 Explorer + AI agents ─────────────────────
+# Templating: {{ path.to.value | filter | filter2 }}. See
+# w3-action-template/docs/display-schema.md for the canonical reference.
+display:
+  brand:
+    name: "ForDefi"
+    short_name: "ForDefi"
+    description: "MPC custody · institutional-grade signing"
+    logo: "https://raw.githubusercontent.com/w3-io/w3-fordefi-action/main/assets/logo.svg"
+    color: "#1A1A2E"
+
+  commands:
+    create-transaction:
+      icon: "lock"
+      title_template: "{{ inputs.data.note | default: 'ForDefi-signed transaction' }}"
+      subtitle_template: "{{ inputs.data.details.chain | chain_pretty }} · to {{ inputs.data.details.to | known_contract_short }}"
+      summary:
+        - { label: "Action", value: "{{ inputs.data.details.data.hex_data | decode_calldata_action }}" }
+        - { label: "Amount", value: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: '—' }}" }
+        - { label: "Destination", value: "{{ inputs.data.details.to | known_contract_brand }}" }
+        - { label: "Vault", value: "{{ inputs.data.vault_id | truncate_addr }}" }
+        - { label: "Signer", value: "ForDefi MPC" }
+      tx_hash_path: "outputs.result.transaction_id"
+      chain_explorer:
+        evm_ethereum_mainnet: "https://etherscan.io/tx/{{tx_hash}}"
+        evm_avalanche_chain: "https://snowtrace.io/tx/{{tx_hash}}"
+        evm_base_mainnet: "https://basescan.org/tx/{{tx_hash}}"
+        evm_ethereum_sepolia: "https://sepolia.etherscan.io/tx/{{tx_hash}}"
+
+    create-transfer:
+      icon: "send"
+      title_template: "Transfer {{ inputs.amount | default: '?' }}"
+      subtitle_template: "to {{ inputs.recipient | truncate_addr }}"
+      summary:
+        - { label: "Amount", value: "{{ inputs.amount }}" }
+        - { label: "Recipient", value: "{{ inputs.recipient | truncate_addr }}" }
+        - { label: "Vault", value: "{{ inputs.vault_id | truncate_addr }}" }
+
+    list-vaults:
+      icon: "vault"
+      title_template: "List ForDefi vaults"
+      subtitle_template: "{{ outputs.result.vaults | length | default: '0' }} vaults"
+
+    get-vault:
+      icon: "vault"
+      title_template: "Get vault"
+      subtitle_template: "{{ outputs.result.address | truncate_addr }}"
+      summary:
+        - { label: "Name", value: "{{ outputs.result.name }}" }
+        - { label: "Address", value: "{{ outputs.result.address | truncate_addr }}" }
+        - { label: "Type", value: "{{ outputs.result.type }}" }
+        - { label: "State", value: "{{ outputs.result.state }}" }
+
+    get-transaction:
+      icon: "info"
+      title_template: "Transaction status"
+      subtitle_template: "{{ outputs.result.state }}"
+      summary:
+        - { label: "State", value: "{{ outputs.result.state }}" }
+        - { label: "Chain", value: "{{ outputs.result.chain.unique_id | chain_pretty }}" }
+        - { label: "Tx hash", value: "{{ outputs.result.transaction_id | truncate_addr }}" }

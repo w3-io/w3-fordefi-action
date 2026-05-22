@@ -279,7 +279,7 @@ display:
     create-transaction:
       icon: 'lock'
       title_template: "{{ inputs.data.note | default: 'ForDefi-signed transaction' }}"
-      subtitle_template: '{{ inputs.data.details.chain | chain_pretty }} · to {{ inputs.data.details.to | known_contract_short }}'
+      subtitle_template: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: 'ForDefi-signed' }}"
       summary:
         - {
             label: 'Action',
@@ -289,15 +289,45 @@ display:
             label: 'Amount',
             value: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: '—' }}",
           }
-        - { label: 'Destination', value: '{{ inputs.data.details.to | known_contract_brand }}' }
         - { label: 'Vault', value: '{{ inputs.data.vault_id | truncate_addr }}' }
         - { label: 'Signer', value: 'ForDefi MPC' }
+      chain_path: 'inputs.data.details.chain'
+      destination_brand_path: 'inputs.data.details.to'
       tx_hash_path: 'outputs.result.transaction_id'
       chain_explorer:
-        evm_ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
-        evm_avalanche_chain: 'https://snowtrace.io/tx/{{tx_hash}}'
-        evm_base_mainnet: 'https://basescan.org/tx/{{tx_hash}}'
-        evm_ethereum_sepolia: 'https://sepolia.etherscan.io/tx/{{tx_hash}}'
+        ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
+        avalanche_chain: 'https://snowtrace.io/tx/{{tx_hash}}'
+        base_mainnet: 'https://basescan.org/tx/{{tx_hash}}'
+        ethereum_sepolia: 'https://sepolia.etherscan.io/tx/{{tx_hash}}'
+
+    # Variant of create-transaction that blocks until ForDefi confirms
+    # the transaction is included on-chain. Same card content; the
+    # extra latency shows up as a longer "in-progress" state in the
+    # Explorer, which is the desired UX for sequential approve→deposit
+    # flows that race a transferFrom allowance otherwise.
+    create-transaction-and-wait:
+      icon: 'lock'
+      title_template: "{{ inputs.data.note | default: 'ForDefi-signed transaction' }}"
+      subtitle_template: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: 'ForDefi-signed' }}"
+      summary:
+        - {
+            label: 'Action',
+            value: '{{ inputs.data.details.data.hex_data | decode_calldata_action }}',
+          }
+        - {
+            label: 'Amount',
+            value: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: '—' }}",
+          }
+        - { label: 'Vault', value: '{{ inputs.data.vault_id | truncate_addr }}' }
+        - { label: 'Signer', value: 'ForDefi MPC' }
+      chain_path: 'inputs.data.details.chain'
+      destination_brand_path: 'inputs.data.details.to'
+      tx_hash_path: 'outputs.result.transaction_id'
+      chain_explorer:
+        ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
+        avalanche_chain: 'https://snowtrace.io/tx/{{tx_hash}}'
+        base_mainnet: 'https://basescan.org/tx/{{tx_hash}}'
+        ethereum_sepolia: 'https://sepolia.etherscan.io/tx/{{tx_hash}}'
 
     create-transfer:
       icon: 'send'

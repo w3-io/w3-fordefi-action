@@ -279,20 +279,21 @@ display:
     create-transaction:
       icon: 'lock'
       title_template: "{{ inputs.data.note | default: 'ForDefi-signed transaction' }}"
-      subtitle_template: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: 'ForDefi-signed' }}"
+      subtitle_template: 'Signed by ForDefi MPC'
       summary:
-        - {
-            label: 'Action',
-            value: '{{ inputs.data.details.data.hex_data | decode_calldata_action }}',
-          }
-        - {
-            label: 'Amount',
-            value: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: '—' }}",
-          }
         - { label: 'Vault', value: '{{ inputs.data.vault_id | truncate_addr }}' }
         - { label: 'Signer', value: 'ForDefi MPC' }
+        - { label: 'Custody', value: 'Institutional (P-256 API signing)' }
       chain_path: 'inputs.data.details.chain'
-      destination_brand_path: 'inputs.data.details.to'
+      # Workflow YAML in v16+ build→sign flows passes `inputs.data` as
+      # a JSON literal string whose `details.to` is the unresolved
+      # `${{ steps.build.outputs.to }}` placeholder. The explorer
+      # reads the raw YAML and can't navigate that. Workflows can put
+      # a literal vault symbol or address at `inputs.data.intent_target`
+      # (e.g. "XFTB", "VaultOS") for the destination chip to resolve
+      # via the known-contracts registry. Optional — manifests that
+      # hardcode hex calldata can leave this pointing at `.details.to`.
+      destination_brand_path: 'inputs.data.intent_target'
       tx_hash_path: 'outputs.result.transaction_id'
       chain_explorer:
         ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
@@ -308,20 +309,21 @@ display:
     create-transaction-and-wait:
       icon: 'lock'
       title_template: "{{ inputs.data.note | default: 'ForDefi-signed transaction' }}"
-      subtitle_template: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: 'ForDefi-signed' }}"
+      subtitle_template: 'Signed by ForDefi MPC'
       summary:
-        - {
-            label: 'Action',
-            value: '{{ inputs.data.details.data.hex_data | decode_calldata_action }}',
-          }
-        - {
-            label: 'Amount',
-            value: "{{ inputs.data.details.data.hex_data | decode_calldata_amount_usdc | default: '—' }}",
-          }
         - { label: 'Vault', value: '{{ inputs.data.vault_id | truncate_addr }}' }
         - { label: 'Signer', value: 'ForDefi MPC' }
+        - { label: 'Custody', value: 'Institutional (P-256 API signing)' }
       chain_path: 'inputs.data.details.chain'
-      destination_brand_path: 'inputs.data.details.to'
+      # Workflow YAML in v16+ build→sign flows passes `inputs.data` as
+      # a JSON literal string whose `details.to` is the unresolved
+      # `${{ steps.build.outputs.to }}` placeholder. The explorer
+      # reads the raw YAML and can't navigate that. Workflows can put
+      # a literal vault symbol or address at `inputs.data.intent_target`
+      # (e.g. "XFTB", "VaultOS") for the destination chip to resolve
+      # via the known-contracts registry. Optional — manifests that
+      # hardcode hex calldata can leave this pointing at `.details.to`.
+      destination_brand_path: 'inputs.data.intent_target'
       tx_hash_path: 'outputs.result.transaction_id'
       chain_explorer:
         ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'

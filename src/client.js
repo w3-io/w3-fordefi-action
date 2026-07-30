@@ -114,9 +114,14 @@ export class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false } = {}) {
+  async post(path, payload, { sign = false, idempotenceId } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
+    // ForDefi dedups transaction creation on the x-idempotence-id header (a
+    // UUID): a repeated create/transfer maps to the existing transaction and
+    // moves money at most once. It is not part of the signed
+    // `path|timestamp|body`, so it is orthogonal to request signing.
+    if (idempotenceId) headers['x-idempotence-id'] = idempotenceId
 
     if (sign) {
       this.#requireSigner()
@@ -259,14 +264,14 @@ export class ForDefiClient {
   getTransaction(id) {
     return this.get(`/api/v1/transactions/${id}`)
   }
-  createTransaction(p) {
-    return this.post('/api/v1/transactions', p, { sign: true })
+  createTransaction(p, opts) {
+    return this.post('/api/v1/transactions', p, { sign: true, ...opts })
   }
-  createTransfer(p) {
-    return this.post('/api/v1/transactions/transfer', p, { sign: true })
+  createTransfer(p, opts) {
+    return this.post('/api/v1/transactions/transfer', p, { sign: true, ...opts })
   }
-  createTransactionAndWait(p) {
-    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true })
+  createTransactionAndWait(p, opts) {
+    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true, ...opts })
   }
   approveTransaction(id) {
     return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true })

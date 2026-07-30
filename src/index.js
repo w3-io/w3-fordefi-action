@@ -8,6 +8,7 @@
 import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
 import { ForDefiClient, setBridgeSigner } from './client.js'
+import { buildTransferPayload, extractOutcome } from './transfer.js'
 
 // If a bridge is available, wire it up for P-256 signing
 if (bridge) {
@@ -35,6 +36,11 @@ function jsonInput(name) {
 
 function req(name) {
   return core.getInput(name, { required: true })
+}
+
+/** The idempotency key for a money-moving create, or undefined. */
+function idem() {
+  return core.getInput('idempotence-id') || undefined
 }
 
 function query(...names) {
@@ -104,11 +110,45 @@ const router = createCommandRouter({
   'get-transaction': async () =>
     setJsonOutput('result', await getClient().getTransaction(req('transaction-id'))),
   'create-transaction': async () =>
-    setJsonOutput('result', await getClient().createTransaction(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransaction(jsonInput('data'), { idempotenceId: idem() }),
+    ),
   'create-transfer': async () =>
-    setJsonOutput('result', await getClient().createTransfer(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransfer(jsonInput('data'), { idempotenceId: idem() }),
+    ),
   'create-transaction-and-wait': async () =>
-    setJsonOutput('result', await getClient().createTransactionAndWait(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransactionAndWait(jsonInput('data'), { idempotenceId: idem() }),
+    ),
+  // Typed vault→external transfer: build the payload from primitives (no
+  // hand-encoded calldata), move money at most once on the idempotence key, and
+  // emit an honest, named outcome.
+  'transfer-out': async () => {
+    const result = await getClient().createTransactionAndWait(
+      buildTransferPayload({
+        vaultId: req('vault-id'),
+        chain: req('chain'),
+        to: req('to'),
+        asset: core.getInput('asset') || undefined,
+        amount: req('amount'),
+        note: core.getInput('note') || undefined,
+      }),
+      { idempotenceId: idem() },
+    )
+    // Named scalar outputs bind directly (no digging into `result`); the raw
+    // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
+    // empty — never the ForDefi UUID.
+    const outcome = extractOutcome(result)
+    core.setOutput('tx_hash', outcome.tx_hash)
+    core.setOutput('transaction_id', outcome.transaction_id)
+    core.setOutput('state', outcome.state)
+    core.setOutput('explorer_url', outcome.explorer_url)
+    setJsonOutput('result', result)
+  },
   'approve-transaction': async () =>
     setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),
   'abort-transaction': async () =>

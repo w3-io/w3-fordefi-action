@@ -5,7 +5,7 @@ author: 'w3-io'
 inputs:
   command:
     description: >-
-      Operation to perform. 71 commands across 17 categories:
+      Operation to perform. 72 commands across 17 categories:
       Vaults (list-vaults, create-vault, get-vault, get-vault-asset,
       list-vault-assets, submit-vault-proposal, archive-vault,
       restore-vault, rename-vault, create-vault-address,
@@ -13,7 +13,8 @@ inputs:
       Vault Groups (list-vault-groups),
       Transactions (list-transactions, get-transaction,
       create-transaction, create-transfer,
-      create-transaction-and-wait, approve-transaction,
+      create-transaction-and-wait, transfer-out,
+      approve-transaction,
       abort-transaction, release-transaction,
       predict-transaction, push-transaction,
       update-spam-state, trigger-signing, export-transactions),
@@ -101,6 +102,31 @@ inputs:
     description: 'JSON request body for create/update operations'
     required: false
 
+  # ── transfer-out (typed vault→external transfer) ─────────────────────
+  chain:
+    description: 'ForDefi chain id, e.g. ethereum_mainnet or avalanche_chain'
+    required: false
+  to:
+    description: 'Destination address (0x-prefixed) for transfer-out'
+    required: false
+  asset:
+    description: >-
+      transfer-out asset: "native" (or empty) for the chain-native coin,
+      else the 0x-prefixed ERC-20 contract address
+    required: false
+  amount:
+    description: 'transfer-out amount in base units (decimal integer; no unit conversion is applied)'
+    required: false
+  note:
+    description: 'Optional human-readable note attached to the transfer-out transaction'
+    required: false
+  idempotence-id:
+    description: >-
+      Idempotency key (UUID) sent as the ForDefi x-idempotence-id header so a
+      repeated create-transaction / create-transfer / transfer-out moves money
+      at most once
+    required: false
+
   # ── Pagination ───────────────────────────────────────────────────────
   page_size:
     description: 'Number of results per page'
@@ -144,6 +170,14 @@ inputs:
 outputs:
   result:
     description: 'JSON result of the operation'
+  tx_hash:
+    description: 'transfer-out: on-chain transaction hash, or empty until mined (never the ForDefi UUID)'
+  transaction_id:
+    description: 'transfer-out: ForDefi transaction UUID'
+  state:
+    description: 'transfer-out: ForDefi transaction state, e.g. completed'
+  explorer_url:
+    description: 'transfer-out: block-explorer URL for the transaction'
 
 runs:
   using: 'node24'

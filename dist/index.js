@@ -28113,9 +28113,14 @@ class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false } = {}) {
+  async post(path, payload, { sign = false, idempotenceId } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
+    // ForDefi dedups transaction creation on the x-idempotence-id header (a
+    // UUID): a repeated create/transfer maps to the existing transaction and
+    // moves money at most once. It is not part of the signed
+    // `path|timestamp|body`, so it is orthogonal to request signing.
+    if (idempotenceId) headers['x-idempotence-id'] = idempotenceId
 
     if (sign) {
       this.#requireSigner()
@@ -28258,14 +28263,14 @@ class ForDefiClient {
   getTransaction(id) {
     return this.get(`/api/v1/transactions/${id}`)
   }
-  createTransaction(p) {
-    return this.post('/api/v1/transactions', p, { sign: true })
+  createTransaction(p, opts) {
+    return this.post('/api/v1/transactions', p, { sign: true, ...opts })
   }
-  createTransfer(p) {
-    return this.post('/api/v1/transactions/transfer', p, { sign: true })
+  createTransfer(p, opts) {
+    return this.post('/api/v1/transactions/transfer', p, { sign: true, ...opts })
   }
-  createTransactionAndWait(p) {
-    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true })
+  createTransactionAndWait(p, opts) {
+    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true, ...opts })
   }
   approveTransaction(id) {
     return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true })
@@ -28495,6 +28500,120 @@ class ForDefiClient {
   }
 }
 
+;// CONCATENATED MODULE: ./src/transfer.js
+/**
+ * transfer-out — a typed vault→external transfer, built from primitives.
+ *
+ * The generic commands take an opaque ForDefi `data` payload; transfer-out
+ * takes typed inputs (chain, to, asset, amount) and BUILDS the payload, so a
+ * caller never hand-encodes calldata. A native transfer moves the chain coin;
+ * an ERC-20 transfer encodes `transfer(address,uint256)` client-side — a fixed
+ * selector plus two 32-byte words, so it needs no ABI library (per the action's
+ * no-blockchain-SDK rule).
+ *
+ * The action does NO unit math: `amount` is base units end-to-end, because the
+ * caller (which owns the asset's decimals) is the only honest source of scale.
+ */
+
+
+
+/** `transfer(address,uint256)` selector — keccak256 of the signature, first 4 bytes. */
+const ERC20_TRANSFER_SELECTOR = 'a9059cbb'
+
+/** uint256 ceiling; an amount at or above it cannot be encoded in one word. */
+const UINT256_LIMIT = 1n << 256n
+
+/** Normalize a 0x-prefixed 20-byte address to lowercase, or fail loud. */
+function parseAddress(value, label) {
+  const s = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  const m = /^0x([0-9a-f]{40})$/.exec(s)
+  if (!m) {
+    throw new error_W3ActionError('INVALID_ADDRESS', `${label} must be a 0x-prefixed 20-byte address`)
+  }
+  return '0x' + m[1]
+}
+
+/** Parse a base-unit amount: non-negative integer, in-range for a uint256. */
+function parseBaseUnits(value) {
+  const s = String(value ?? '').trim()
+  if (!/^\d+$/.test(s)) {
+    throw new error_W3ActionError('INVALID_AMOUNT', 'amount must be a base-unit integer (decimal digits)')
+  }
+  const amt = BigInt(s)
+  if (amt >= UINT256_LIMIT) {
+    throw new error_W3ActionError('INVALID_AMOUNT', 'amount exceeds uint256')
+  }
+  return amt
+}
+
+/** Left-pad hex (no `0x`) to a 32-byte EVM word. */
+function word(hex) {
+  return hex.replace(/^0x/, '').padStart(64, '0')
+}
+
+/**
+ * `transfer(to, amount)` calldata for an ERC-20 token. `amount` may be a bigint
+ * (already parsed) or a base-unit string.
+ */
+function encodeErc20Transfer(to, amount) {
+  const amt = typeof amount === 'bigint' ? amount : parseBaseUnits(amount)
+  return '0x' + ERC20_TRANSFER_SELECTOR + word(parseAddress(to, 'to')) + word(amt.toString(16))
+}
+
+/**
+ * Build the ForDefi create-transaction payload for a transfer out of `vaultId`.
+ * `asset` is `native`/empty for the chain coin, else the 0x ERC-20 contract:
+ * native pays `value` to `to`; ERC-20 calls `to`'s token contract with encoded
+ * `transfer` calldata and zero value.
+ */
+function buildTransferPayload({ vaultId, chain, to, asset, amount, note }) {
+  if (!vaultId) throw new error_W3ActionError('MISSING_INPUT', 'vault-id is required')
+  if (!chain) throw new error_W3ActionError('MISSING_INPUT', 'chain is required')
+  const dest = parseAddress(to, 'to')
+  const amt = parseBaseUnits(amount)
+  const isNative = !asset || asset.trim().toLowerCase() === 'native'
+  const gas = { type: 'priority', priority_level: 'medium' }
+  const details = isNative
+    ? { type: 'evm_raw_transaction', chain, to: dest, value: amt.toString(10), gas }
+    : {
+        type: 'evm_raw_transaction',
+        chain,
+        to: parseAddress(asset, 'asset'),
+        value: '0',
+        data: { type: 'hex', hex_data: encodeErc20Transfer(dest, amt) },
+        gas,
+      }
+  return {
+    vault_id: vaultId,
+    signer_type: 'api_signer',
+    wait_for_state: 'completed',
+    type: 'evm_transaction',
+    details,
+    ...(note ? { note } : {}),
+  }
+}
+
+/**
+ * Extract the honest, named outcome from a ForDefi transaction response.
+ *
+ * `tx_hash` is the ON-CHAIN hash (`hash`), empty when ForDefi has not surfaced
+ * one — NEVER the ForDefi UUID (`id`) standing in for it. Conflating the two is
+ * exactly the bug this command exists to avoid: a UUID is not a transaction
+ * hash, and a block explorer link built from it is a lie.
+ */
+function extractOutcome(result) {
+  const r = result && typeof result === 'object' ? result : {}
+  const str = (v) => (typeof v === 'string' ? v : '')
+  return {
+    tx_hash: str(r.hash),
+    transaction_id: str(r.id),
+    state: str(r.state),
+    explorer_url: str(r.explorer_url),
+  }
+}
+
 ;// CONCATENATED MODULE: ./src/index.js
 /**
  * W3 ForDefi Action — 71 commands across 17 categories.
@@ -28502,6 +28621,7 @@ class ForDefiClient {
  * MPC-secured custody, multi-chain transactions, swaps, WaaS,
  * and organizational key management.
  */
+
 
 
 
@@ -28533,6 +28653,11 @@ function jsonInput(name) {
 
 function req(name) {
   return lib_core.getInput(name, { required: true })
+}
+
+/** The idempotency key for a money-moving create, or undefined. */
+function idem() {
+  return lib_core.getInput('idempotence-id') || undefined
 }
 
 function query(...names) {
@@ -28602,11 +28727,45 @@ const router = createCommandRouter({
   'get-transaction': async () =>
     setJsonOutput('result', await getClient().getTransaction(req('transaction-id'))),
   'create-transaction': async () =>
-    setJsonOutput('result', await getClient().createTransaction(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransaction(jsonInput('data'), { idempotenceId: idem() }),
+    ),
   'create-transfer': async () =>
-    setJsonOutput('result', await getClient().createTransfer(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransfer(jsonInput('data'), { idempotenceId: idem() }),
+    ),
   'create-transaction-and-wait': async () =>
-    setJsonOutput('result', await getClient().createTransactionAndWait(jsonInput('data'))),
+    setJsonOutput(
+      'result',
+      await getClient().createTransactionAndWait(jsonInput('data'), { idempotenceId: idem() }),
+    ),
+  // Typed vault→external transfer: build the payload from primitives (no
+  // hand-encoded calldata), move money at most once on the idempotence key, and
+  // emit an honest, named outcome.
+  'transfer-out': async () => {
+    const result = await getClient().createTransactionAndWait(
+      buildTransferPayload({
+        vaultId: req('vault-id'),
+        chain: req('chain'),
+        to: req('to'),
+        asset: lib_core.getInput('asset') || undefined,
+        amount: req('amount'),
+        note: lib_core.getInput('note') || undefined,
+      }),
+      { idempotenceId: idem() },
+    )
+    // Named scalar outputs bind directly (no digging into `result`); the raw
+    // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
+    // empty — never the ForDefi UUID.
+    const outcome = extractOutcome(result)
+    lib_core.setOutput('tx_hash', outcome.tx_hash)
+    lib_core.setOutput('transaction_id', outcome.transaction_id)
+    lib_core.setOutput('state', outcome.state)
+    lib_core.setOutput('explorer_url', outcome.explorer_url)
+    setJsonOutput('result', result)
+  },
   'approve-transaction': async () =>
     setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),
   'abort-transaction': async () =>

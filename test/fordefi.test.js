@@ -11,7 +11,12 @@ import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { ForDefiClient } from '../src/client.js'
-import { buildTransferPayload, encodeErc20Transfer, extractOutcome } from '../src/transfer.js'
+import {
+  assertSettled,
+  buildTransferPayload,
+  encodeErc20Transfer,
+  extractOutcome,
+} from '../src/transfer.js'
 import { W3ActionError } from '@w3-io/action-core'
 
 const VAULTS_RESPONSE = {
@@ -203,6 +208,37 @@ describe('transfer: extractOutcome', () => {
     assert.equal(o.tx_hash, '')
     assert.notEqual(o.tx_hash, 'fd-uuid')
     assert.equal(o.transaction_id, 'fd-uuid')
+  })
+})
+
+describe('transfer: assertSettled', () => {
+  it('passes a completed transfer', () => {
+    assert.doesNotThrow(() =>
+      assertSettled({ state: 'completed', transaction_id: 'fd', tx_hash: '0xabc' }),
+    )
+  })
+
+  it('throws on a failure terminal', () => {
+    for (const state of ['aborted', 'error', 'reverted', 'stuck']) {
+      assert.throws(
+        () => assertSettled({ state, transaction_id: 'fd' }),
+        (e) => e instanceof W3ActionError && e.code === 'TRANSFER_NOT_COMPLETED',
+      )
+    }
+  })
+
+  it('throws on a non-terminal state left by an elapsed wait', () => {
+    assert.throws(
+      () => assertSettled({ state: 'mining', transaction_id: 'fd' }),
+      (e) => e.code === 'TRANSFER_NOT_COMPLETED',
+    )
+  })
+
+  it('throws on a missing state — fails closed', () => {
+    assert.throws(
+      () => assertSettled({ state: '', transaction_id: 'fd' }),
+      (e) => e.code === 'TRANSFER_NOT_COMPLETED',
+    )
   })
 })
 

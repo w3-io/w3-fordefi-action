@@ -8,7 +8,7 @@
 import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
 import { ForDefiClient, setBridgeSigner } from './client.js'
-import { buildTransferPayload, extractOutcome } from './transfer.js'
+import { assertSettled, buildTransferPayload, extractOutcome } from './transfer.js'
 
 // If a bridge is available, wire it up for P-256 signing
 if (bridge) {
@@ -143,6 +143,9 @@ const router = createCommandRouter({
     // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
     // empty — never the ForDefi UUID.
     const outcome = extractOutcome(result)
+    // A non-completed transfer (a failure terminal, or an elapsed wait) fails
+    // the step, so a consumer never reads a stalled/failed transfer as success.
+    assertSettled(outcome)
     core.setOutput('tx_hash', outcome.tx_hash)
     core.setOutput('transaction_id', outcome.transaction_id)
     core.setOutput('state', outcome.state)

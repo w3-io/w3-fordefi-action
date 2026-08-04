@@ -110,3 +110,19 @@ export function extractOutcome(result) {
     explorer_url: str(r.explorer_url),
   }
 }
+
+/**
+ * A transfer is settled only in ForDefi's `completed` terminal state. Any other
+ * value — a failure terminal (aborted/error/reverted), or a non-terminal state
+ * left when the server-side `wait_for_state: completed` elapses — must fail the
+ * step, so a consumer never reads a non-completed transfer as a success.
+ * Allowlist, not denylist: an unknown state fails closed.
+ */
+export function assertSettled(outcome) {
+  if (outcome.state !== 'completed') {
+    throw new W3ActionError(
+      'TRANSFER_NOT_COMPLETED',
+      `transfer did not complete: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
+    )
+  }
+}

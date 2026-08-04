@@ -28614,6 +28614,22 @@ function extractOutcome(result) {
   }
 }
 
+/**
+ * A transfer is settled only in ForDefi's `completed` terminal state. Any other
+ * value — a failure terminal (aborted/error/reverted), or a non-terminal state
+ * left when the server-side `wait_for_state: completed` elapses — must fail the
+ * step, so a consumer never reads a non-completed transfer as a success.
+ * Allowlist, not denylist: an unknown state fails closed.
+ */
+function assertSettled(outcome) {
+  if (outcome.state !== 'completed') {
+    throw new error_W3ActionError(
+      'TRANSFER_NOT_COMPLETED',
+      `transfer did not complete: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
+    )
+  }
+}
+
 ;// CONCATENATED MODULE: ./src/index.js
 /**
  * W3 ForDefi Action — 71 commands across 17 categories.
@@ -28760,6 +28776,9 @@ const router = createCommandRouter({
     // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
     // empty — never the ForDefi UUID.
     const outcome = extractOutcome(result)
+    // A non-completed transfer (a failure terminal, or an elapsed wait) fails
+    // the step, so a consumer never reads a stalled/failed transfer as success.
+    assertSettled(outcome)
     lib_core.setOutput('tx_hash', outcome.tx_hash)
     lib_core.setOutput('transaction_id', outcome.transaction_id)
     lib_core.setOutput('state', outcome.state)

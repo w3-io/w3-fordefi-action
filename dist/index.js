@@ -28614,18 +28614,36 @@ function extractOutcome(result) {
   }
 }
 
+/** Definitive non-settlement states: ForDefi reports the transfer will not
+ *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
+ *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
+ *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
+ *  chain, so an unrecognized or in-flight state is NOT a failure here. */
+const TERMINAL_FAILURE = new Set([
+  'aborted',
+  'error_pushing_to_blockchain',
+  'error_signing',
+  'dropped',
+  'cancelled',
+  'mined_reverted',
+  'completed_reverted',
+])
+
 /**
- * A transfer is settled only in ForDefi's `completed` terminal state. Any other
- * value — a failure terminal (aborted/error/reverted), or a non-terminal state
- * left when the server-side `wait_for_state: completed` elapses — must fail the
- * step, so a consumer never reads a non-completed transfer as a success.
- * Allowlist, not denylist: an unknown state fails closed.
+ * Fail the step only when the transfer definitively did not settle. Money
+ * moving is confirmed downstream from the chain (the consumer re-reads the
+ * receipt for finality and reversion), so this asserts the weaker, robust
+ * property: ForDefi has not reported a terminal failure. An in-flight tx or an
+ * unrecognized state passes — a hiccup or delay in execution (a slow-to-mine
+ * or not-yet-broadcast transfer) must not be recorded as a failure. Fail-open
+ * to the chain oracle, which is the authority on settlement; fail-closed only
+ * on a state ForDefi names as terminal-failed.
  */
-function assertSettled(outcome) {
-  if (outcome.state !== 'completed') {
+function assertNotFailed(outcome) {
+  if (TERMINAL_FAILURE.has(outcome.state)) {
     throw new error_W3ActionError(
-      'TRANSFER_NOT_COMPLETED',
-      `transfer did not complete: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
+      'TRANSFER_FAILED',
+      `transfer failed: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
     )
   }
 }
@@ -28776,14 +28794,16 @@ const router = createCommandRouter({
     // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
     // empty — never the ForDefi UUID.
     const outcome = extractOutcome(result)
-    // A non-completed transfer (a failure terminal, or an elapsed wait) fails
-    // the step, so a consumer never reads a stalled/failed transfer as success.
-    assertSettled(outcome)
+    // Emit the outcome BEFORE asserting, so a failed transfer still surfaces its
+    // hash and state for audit rather than being swallowed by the throw.
     lib_core.setOutput('tx_hash', outcome.tx_hash)
     lib_core.setOutput('transaction_id', outcome.transaction_id)
     lib_core.setOutput('state', outcome.state)
     lib_core.setOutput('explorer_url', outcome.explorer_url)
     setJsonOutput('result', result)
+    // Fail only on a definitive non-settlement; an in-flight or on-chain tx
+    // succeeds and the consumer confirms finality (and reversion) from the chain.
+    assertNotFailed(outcome)
   },
   'approve-transaction': async () =>
     setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),

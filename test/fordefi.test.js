@@ -12,7 +12,7 @@ import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { ForDefiClient } from '../src/client.js'
 import {
-  assertSettled,
+  assertNotFailed,
   buildTransferPayload,
   encodeErc20Transfer,
   extractOutcome,
@@ -211,34 +211,38 @@ describe('transfer: extractOutcome', () => {
   })
 })
 
-describe('transfer: assertSettled', () => {
-  it('passes a completed transfer', () => {
-    assert.doesNotThrow(() =>
-      assertSettled({ state: 'completed', transaction_id: 'fd', tx_hash: '0xabc' }),
-    )
-  })
-
-  it('throws on a failure terminal', () => {
-    for (const state of ['aborted', 'error', 'reverted', 'stuck']) {
-      assert.throws(
-        () => assertSettled({ state, transaction_id: 'fd' }),
-        (e) => e instanceof W3ActionError && e.code === 'TRANSFER_NOT_COMPLETED',
-      )
+describe('transfer: assertNotFailed', () => {
+  it('passes an on-chain or in-flight transfer', () => {
+    for (const state of ['pushed_to_blockchain', 'mined', 'completed', 'stuck', 'queued']) {
+      assert.doesNotThrow(() => assertNotFailed({ state, transaction_id: 'fd', tx_hash: '0xabc' }))
     }
   })
 
-  it('throws on a non-terminal state left by an elapsed wait', () => {
-    assert.throws(
-      () => assertSettled({ state: 'mining', transaction_id: 'fd' }),
-      (e) => e.code === 'TRANSFER_NOT_COMPLETED',
+  it('passes an unrecognized state — defers to the chain oracle, not a failure', () => {
+    assert.doesNotThrow(() => assertNotFailed({ state: 'some_future_state', transaction_id: 'fd' }))
+  })
+
+  it('passes a not-yet-broadcast transfer with no hash — a delay is not a failure', () => {
+    assert.doesNotThrow(() =>
+      assertNotFailed({ state: 'signed', transaction_id: 'fd', tx_hash: '' }),
     )
   })
 
-  it('throws on a missing state — fails closed', () => {
-    assert.throws(
-      () => assertSettled({ state: '', transaction_id: 'fd' }),
-      (e) => e.code === 'TRANSFER_NOT_COMPLETED',
-    )
+  it('throws on a definitive non-settlement', () => {
+    for (const state of [
+      'mined_reverted',
+      'completed_reverted',
+      'aborted',
+      'error_pushing_to_blockchain',
+      'error_signing',
+      'dropped',
+      'cancelled',
+    ]) {
+      assert.throws(
+        () => assertNotFailed({ state, transaction_id: 'fd', tx_hash: '0xabc' }),
+        (e) => e instanceof W3ActionError && e.code === 'TRANSFER_FAILED',
+      )
+    }
   })
 })
 

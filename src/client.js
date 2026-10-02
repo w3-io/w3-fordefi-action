@@ -173,7 +173,20 @@ export class ForDefiClient {
 
     if (sign) {
       this.#requireSigner()
-      const timestamp = Date.now().toString()
+      const signedAt = Date.now()
+      // The signed timestamp is the one ForDefi's signature window is measured
+      // from, on ForDefi's clock, and every attempt below reuses it. Refusing
+      // here unless it is strictly earlier than the deadline bounds what
+      // ForDefi can accept for this request to before the deadline plus that
+      // window, whatever this process's clock says.
+      if (notAfter !== undefined && signedAt >= notAfter) {
+        throw new W3ActionError(
+          'DEADLINE_PASSED',
+          `not sent: the signed timestamp ${new Date(signedAt).toISOString()} is not earlier than the deadline ${new Date(notAfter).toISOString()}`,
+          { details: { unsettled: false } },
+        )
+      }
+      const timestamp = signedAt.toString()
       headers['x-signature'] = await this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }

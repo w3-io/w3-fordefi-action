@@ -220,7 +220,7 @@ commands:
       not-after:
         type: string
         required: true
-        description: 'Deadline as an RFC 3339 UTC instant (e.g. 2026-10-02T20:15:00.000Z); no create request is sent at or after it'
+        description: 'Deadline as an RFC 3339 UTC instant (e.g. 2026-10-02T20:15:00.000Z); every create request is signed with a timestamp strictly earlier than it, and none is sent at or after it'
       value:
         type: string
         required: false

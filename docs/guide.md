@@ -189,30 +189,35 @@ ForDefi simulates the call at create. A call that would revert (a deposit with n
 
 `not-after` is an RFC 3339 UTC instant (`2026-10-02T20:15:00.000Z`) and is required.
 
-**Guarantee: the step sends nothing to ForDefi at or after `not-after`. The latest possible send is strictly before it.**
+**Guarantee: every request the step sends is signed with a timestamp strictly earlier than `not-after`, and the step sends nothing at or after `not-after` by its own clock.**
 
-Three rules give it, each read against the step's own clock:
+Four rules give it:
 
-1. No attempt begins at or after the deadline. The check runs immediately before every attempt, the first and each retry alike, after the request has been signed.
-2. A retry wait that would end at or after the deadline is not waited out, whether it is the client's backoff or a `Retry-After` the server asked for.
-3. An attempt still in flight at the deadline is abandoned there: the client closes the request rather than wait out its 30-second timeout.
+1. The request is signed once, before the first attempt, and is refused unless its signed timestamp (`x-timestamp`) is strictly earlier than the deadline. Every retry reuses that signature and timestamp.
+2. No attempt begins at or after the deadline. The check runs immediately before every attempt, the first and each retry alike.
+3. A retry wait that would end at or after the deadline is not waited out, whether it is the client's backoff or a `Retry-After` the server asked for.
+4. An attempt still in flight at the deadline is abandoned there: the client closes the request rather than wait out its 30-second timeout.
 
 Each ends the step with `DEADLINE_PASSED`.
 
-The guarantee is about what the step sends, not about what ForDefi does with it. A request delivered just before the deadline is ForDefi's to finish, and under rule 3 the step may never learn what it made. The instant is read against the runner's clock, so a consumer that reasons from the deadline allows for the difference between that clock and its own, and for ForDefi's own time to process a request and list the transaction.
+Rule 1 is the one that binds ForDefi. ForDefi refuses a request whose signed timestamp is older than its signature window, on ForDefi's own clock: a timestamp 180 seconds old was refused (`expired_signed_request_timestamp`, observed 2026-10-02), and the documentation states 120 seconds. So ForDefi accepts a request from this step only before `not-after` plus that window, measured on ForDefi's clock, however wrong the runner's clock is. Rules 2 to 4 bound only what the step itself does, on the runner's clock.
 
-A consumer uses it to make an absence conclusive. A step can run long after it was triggered, and more than one run can carry one key, so finding no transaction under a key proves nothing while a create could still be sent. After the deadline none can be, and what remains to allow for is ForDefi's processing of a request it already holds and the clock difference.
+What remains outside the step: a request ForDefi accepted is ForDefi's to finish, and under rule 4 the step may never learn what it made; and a created transaction takes a moment to appear in ForDefi's listing (about two seconds, one sample).
+
+A consumer uses the deadline to make an absence conclusive. A step can run long after it was triggered, and more than one run can carry one key, so finding no transaction under a key proves nothing while a request could still be accepted. Once `not-after` plus ForDefi's signature window plus the listing delay has passed, none can be.
 
 Tests that pin it, in `test/call.test.js` and `test/fordefi.test.js`:
 
-| Test                                                           | What it pins                                                                     |
-| -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `sends nothing at or after the deadline`                       | The comparison is strict: a deadline equal to the present instant sends nothing. |
-| `sends nothing once the deadline has passed`                   | The step makes no request and fails with `DEADLINE_PASSED`.                      |
-| `does not wait out a retry that would reach the deadline`      | A `Retry-After` longer than the time left is refused, not slept, after a 5xx.    |
-| `does not wait out a rate limit that would reach the deadline` | The same after a 429.                                                            |
-| `abandons an attempt still in flight at the deadline`          | The client stops waiting at the deadline instead of at its 30-second timeout.    |
-| `retries inside the deadline`                                  | A retry that fits before the deadline is still sent.                             |
+| Test                                                                       | What it pins                                                                             |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `signs no request whose timestamp is not earlier than the deadline`        | Rule 1: a request whose signed timestamp equals the deadline is neither signed nor sent. |
+| `sends every attempt under one signed timestamp earlier than the deadline` | Rule 1: a retry reuses the one signature, whose timestamp is before the deadline.        |
+| `sends nothing at or after the deadline`                                   | Rule 2: the comparison is strict: a deadline equal to the present instant sends nothing. |
+| `sends nothing once the deadline has passed`                               | Rule 2: the step makes no request and fails with `DEADLINE_PASSED`.                      |
+| `does not wait out a retry that would reach the deadline`                  | Rule 3: a `Retry-After` longer than the time left is refused, not slept, after a 5xx.    |
+| `does not wait out a rate limit that would reach the deadline`             | Rule 3: the same after a 429.                                                            |
+| `abandons an attempt still in flight at the deadline`                      | Rule 4: the client stops waiting at the deadline instead of at its 30-second timeout.    |
+| `retries inside the deadline`                                              | Rules 2 and 3: a retry that fits before the deadline is still sent.                      |
 
 ##### What a failed step says
 

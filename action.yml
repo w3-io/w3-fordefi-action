@@ -135,7 +135,8 @@ inputs:
   not-after:
     description: >-
       call-contract deadline, required: an RFC 3339 UTC instant such as
-      2026-10-02T20:15:00.000Z. No create request is sent at or after it
+      2026-10-02T20:15:00.000Z. Every create request is signed with a
+      timestamp strictly earlier than it, and none is sent at or after it
     required: false
   value:
     description: >-

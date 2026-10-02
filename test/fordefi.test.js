@@ -272,6 +272,46 @@ describe('ForDefiClient: send deadline', () => {
     assert.equal(calls.length, 0)
   })
 
+  it('signs no request whose timestamp is not earlier than the deadline', async () => {
+    // The clock reads exactly the deadline when the request is signed. The
+    // refusal names the signed timestamp, and nothing is signed or sent.
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const notAfter = Date.now() + 60_000
+    const realNow = Date.now
+    Date.now = () => notAfter
+    try {
+      await assert.rejects(
+        () => client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter }),
+        (err) =>
+          err instanceof W3ActionError &&
+          err.code === 'DEADLINE_PASSED' &&
+          /signed timestamp/.test(err.message),
+      )
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it('sends every attempt under one signed timestamp earlier than the deadline', async () => {
+    // A retry reuses the request signed once, so ForDefi's signature window
+    // runs from a timestamp before the deadline on every attempt.
+    mockFetch([{ status: 503, body: {} }, { body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const notAfter = Date.now() + 60_000
+    const result = await client.createTransaction(
+      { vault_id: 'v' },
+      { idempotenceId: 'k', notAfter },
+    )
+    assert.equal(result.id, 'fd')
+    assert.equal(calls.length, 2)
+    const stamps = calls.map((c) => Number(c.options.headers['x-timestamp']))
+    assert.equal(stamps[0], stamps[1])
+    assert.ok(stamps[0] < notAfter)
+    assert.equal(calls[0].options.headers['x-signature'], calls[1].options.headers['x-signature'])
+  })
+
   it('sends before the deadline', async () => {
     mockFetch([{ body: { id: 'fd' } }])
     const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })

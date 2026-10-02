@@ -191,6 +191,35 @@ What a failed step says about the custodian:
 | no `transaction_id`, `error-code` one of `AMBIGUOUS_CREATE`, `TIMEOUT`, `INVALID_RESPONSE`, or `HTTP_ERROR` with `status-code` 5xx, or no `error-code` at all (a network error) | Unknown. A request may have reached ForDefi, so a transaction may exist under the idempotence key. `AMBIGUOUS_CREATE` is a 4xx that followed a timeout or a 5xx.                                          |
 | no `transaction_id`, an input error (`MISSING_INPUT`, `INVALID_ADDRESS`, `INVALID_AMOUNT`, `INVALID_CALLDATA`, `INVALID_IDEMPOTENCE_ID`, `MISSING_SIGNER`)                      | No request was sent.                                                                                                                                                                                      |
 
+#### transfer-out (signing)
+
+Transfer the chain coin or an ERC-20 out of a vault to an external address. The command builds the payload from primitives, so no calldata is hand-encoded, and waits for ForDefi to report the transaction completed.
+
+**Inputs:** `vault-id`, `chain`, `to`, `amount` (required, base units), `asset` (`native` or the ERC-20 contract; default `native`), `idempotence-id`, `note`
+
+**Outputs:** `transaction_id`, `state`, `tx_hash`, `explorer_url`, `result`
+
+```yaml
+- uses: w3-io/w3-fordefi-action@v0
+  id: transfer
+  with:
+    command: transfer-out
+    access-token: ${{ secrets.FORDEFI_ACCESS_TOKEN }}
+    private-key: ${{ secrets.FORDEFI_PRIVATE_KEY }}
+    vault-id: ${{ inputs.vault_id }}
+    chain: ethereum_mainnet
+    to: ${{ inputs.to }}
+    asset: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'
+    amount: ${{ inputs.amount }}
+    idempotence-id: ${{ inputs.withdrawal_id }}
+```
+
+The step fails only on a state ForDefi names as definitive failure or on a response that names no transaction. A transfer still in flight when the wait ends succeeds, and the consumer confirms settlement from the chain. A failed step reads as the table under [call-contract](#call-contract-signing) says, with `TRANSFER_FAILED` in place of `CALL_FAILED`.
+
+#### Retries and the idempotence key
+
+`create-transaction`, `create-transfer`, `create-transaction-and-wait`, `transfer-out` and `call-contract` create a transaction, and a create that times out or answers 5xx may have been processed. With `idempotence-id` set, the client retries it under the same key and ForDefi answers with the transaction the first attempt made. Without it nothing ties a second request to the first, so the client does not retry: the step fails after one attempt, and whether a transaction exists is unknown. A 429 processed nothing and is retried either way.
+
 #### predict-transaction (signing)
 
 Simulate a transaction before execution. Returns fee estimates, effect predictions, revert detection, risk screening results, and policy matching.

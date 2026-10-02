@@ -34,8 +34,12 @@ const RETRY_DELAY_MS = 1000
  * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response
  * and whether an earlier attempt ended without a verdict: a timeout or a 5xx
  * may have been processed, where a 429 was not.
+ *
+ * `retryUnsettled: false` retries a 429 and nothing else. It is for a request
+ * that is not safe to repeat: a create sent without an idempotence key, where
+ * a second request after an unanswered first can create a second transaction.
  */
-async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
+async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled = true } = {}) {
   let unsettled = false
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController()
@@ -43,7 +47,8 @@ async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })
       clearTimeout(timer)
-      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
+      const retryable = res.status === 429 || (res.status >= 500 && retryUnsettled)
+      if (retryable && attempt < retries) {
         const retryAfter = res.headers.get('retry-after')
         const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
         const delay = Number.isFinite(retrySeconds)
@@ -56,7 +61,8 @@ async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
       return { res, unsettled }
     } catch (e) {
       clearTimeout(timer)
-      if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+      const timedOut = e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT'
+      if (timedOut && retryUnsettled && attempt < retries) {
         unsettled = true
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
         continue
@@ -91,12 +97,12 @@ export class ForDefiClient {
   // Transport
   // ---------------------------------------------------------------------------
 
-  async #apiCall(method, url, headers, body) {
-    const { res, unsettled } = await fetchWithRetry(url, {
-      method,
-      headers,
-      ...(body !== undefined ? { body } : {}),
-    })
+  async #apiCall(method, url, headers, body, retry) {
+    const { res, unsettled } = await fetchWithRetry(
+      url,
+      { method, headers, ...(body !== undefined ? { body } : {}) },
+      retry,
+    )
     if (!res.ok) {
       const text = await res.text().catch(() => '')
       throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, {
@@ -125,7 +131,7 @@ export class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false, idempotenceId } = {}) {
+  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
     // ForDefi dedups transaction creation on the x-idempotence-id header (a
@@ -141,7 +147,7 @@ export class ForDefiClient {
       headers['x-timestamp'] = timestamp
     }
 
-    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody)
+    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, { retryUnsettled })
   }
 
   async put(path, payload, { sign = false } = {}) {
@@ -275,14 +281,25 @@ export class ForDefiClient {
   getTransaction(id) {
     return this.get(`/api/v1/transactions/${id}`)
   }
+  // The three creates that take an idempotence key. With the key, a repeated
+  // request names the transaction the first one made, so an unanswered
+  // attempt is retried. Without it nothing ties the two requests together,
+  // and the create is sent at most once past a 429.
   createTransaction(p, opts) {
-    return this.post('/api/v1/transactions', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions', p, opts)
   }
   createTransfer(p, opts) {
-    return this.post('/api/v1/transactions/transfer', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions/transfer', p, opts)
   }
   createTransactionAndWait(p, opts) {
-    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions/create-and-wait', p, opts)
+  }
+  #create(path, p, { idempotenceId } = {}) {
+    return this.post(path, p, {
+      sign: true,
+      idempotenceId,
+      retryUnsettled: Boolean(idempotenceId),
+    })
   }
   approveTransaction(id) {
     return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true })

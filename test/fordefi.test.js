@@ -11,12 +11,8 @@ import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
 import { ForDefiClient } from '../src/client.js'
-import {
-  assertNotFailed,
-  buildTransferPayload,
-  encodeErc20Transfer,
-  extractOutcome,
-} from '../src/transfer.js'
+import { extractOutcome } from '../src/outcome.js'
+import { assertNotFailed, buildTransferPayload, encodeErc20Transfer } from '../src/transfer.js'
 import { W3ActionError } from '@w3-io/action-core'
 
 const VAULTS_RESPONSE = {
@@ -225,6 +221,13 @@ describe('transfer: assertNotFailed', () => {
   it('passes a not-yet-broadcast transfer with no hash — a delay is not a failure', () => {
     assert.doesNotThrow(() =>
       assertNotFailed({ state: 'signed', transaction_id: 'fd', tx_hash: '' }),
+    )
+  })
+
+  it('throws on a response that names no transaction', () => {
+    assert.throws(
+      () => assertNotFailed({ state: 'completed', transaction_id: '', tx_hash: '' }),
+      (e) => e instanceof W3ActionError && e.code === 'INVALID_RESPONSE',
     )
   })
 

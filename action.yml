@@ -143,8 +143,10 @@ inputs:
   idempotence-id:
     description: >-
       Idempotency key (UUID) sent as the ForDefi x-idempotence-id header so a
-      repeated create-transaction / create-transfer / transfer-out /
-      call-contract moves money at most once. Required for call-contract
+      repeated create-transaction / create-transfer /
+      create-transaction-and-wait / transfer-out / call-contract moves money
+      at most once. Required for call-contract. Without it a create that
+      times out or answers 5xx is not retried
     required: false
 
   # ── Pagination ───────────────────────────────────────────────────────

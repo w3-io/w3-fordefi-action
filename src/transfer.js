@@ -13,6 +13,7 @@
  */
 
 import { W3ActionError } from '@w3-io/action-core'
+import { assertNamed, failedDefinitively } from './outcome.js'
 
 /** `transfer(address,uint256)` selector — keccak256 of the signature, first 4 bytes. */
 const ERC20_TRANSFER_SELECTOR = 'a9059cbb'
@@ -96,45 +97,6 @@ export function buildTransferPayload({ vaultId, chain, to, asset, amount, note }
 }
 
 /**
- * Extract the honest, named outcome from a ForDefi transaction response.
- *
- * `tx_hash` is the ON-CHAIN hash (`hash`), empty when ForDefi has not surfaced
- * one — NEVER the ForDefi UUID (`id`) standing in for it. Conflating the two is
- * exactly the bug this command exists to avoid: a UUID is not a transaction
- * hash, and a block explorer link built from it is a lie.
- */
-export function extractOutcome(result) {
-  const r = result && typeof result === 'object' ? result : {}
-  const str = (v) => (typeof v === 'string' ? v : '')
-  return {
-    tx_hash: str(r.hash),
-    transaction_id: str(r.id),
-    state: str(r.state),
-    explorer_url: str(r.explorer_url),
-  }
-}
-
-/** Definitive non-settlement states: ForDefi reports the transaction will not
- *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
- *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
- *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
- *  chain, so an unrecognized or in-flight state is NOT a failure here. */
-const TERMINAL_FAILURE = new Set([
-  'aborted',
-  'error_pushing_to_blockchain',
-  'error_signing',
-  'dropped',
-  'cancelled',
-  'mined_reverted',
-  'completed_reverted',
-])
-
-/** Whether `state` is one ForDefi names as a definitive non-settlement. */
-export function failedDefinitively(state) {
-  return TERMINAL_FAILURE.has(state)
-}
-
-/**
  * Fail the step only when the transfer definitively did not settle. Money
  * moving is confirmed downstream from the chain (the consumer re-reads the
  * receipt for finality and reversion), so this asserts the weaker, robust
@@ -142,9 +104,11 @@ export function failedDefinitively(state) {
  * unrecognized state passes — a hiccup or delay in execution (a slow-to-mine
  * or not-yet-broadcast transfer) must not be recorded as a failure. Fail-open
  * to the chain oracle, which is the authority on settlement; fail-closed only
- * on a state ForDefi names as terminal-failed.
+ * on a state ForDefi names as terminal-failed, and on a response that names
+ * no transaction at all (`assertNamed`).
  */
 export function assertNotFailed(outcome) {
+  assertNamed(outcome)
   if (failedDefinitively(outcome.state)) {
     throw new W3ActionError(
       'TRANSFER_FAILED',

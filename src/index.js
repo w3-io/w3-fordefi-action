@@ -8,8 +8,9 @@
 import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
 import { ForDefiClient, setBridgeSigner } from './client.js'
-import { assertCallCreated, buildCallPayload, createFailure, parseIdempotenceId } from './call.js'
-import { assertNotFailed, buildTransferPayload, extractOutcome } from './transfer.js'
+import { assertCallCreated, buildCallPayload, parseIdempotenceId } from './call.js'
+import { createFailure, extractOutcome } from './outcome.js'
+import { assertNotFailed, buildTransferPayload } from './transfer.js'
 
 // If a bridge is available, wire it up for P-256 signing
 if (bridge) {
@@ -129,17 +130,19 @@ const router = createCommandRouter({
   // hand-encoded calldata), move money at most once on the idempotence key, and
   // emit an honest, named outcome.
   'transfer-out': async () => {
-    const result = await getClient().createTransactionAndWait(
-      buildTransferPayload({
-        vaultId: req('vault-id'),
-        chain: req('chain'),
-        to: req('to'),
-        asset: core.getInput('asset') || undefined,
-        amount: req('amount'),
-        note: core.getInput('note') || undefined,
-      }),
-      { idempotenceId: idem() },
-    )
+    const payload = buildTransferPayload({
+      vaultId: req('vault-id'),
+      chain: req('chain'),
+      to: req('to'),
+      asset: core.getInput('asset') || undefined,
+      amount: req('amount'),
+      note: core.getInput('note') || undefined,
+    })
+    const result = await getClient()
+      .createTransactionAndWait(payload, { idempotenceId: idem() })
+      .catch((e) => {
+        throw createFailure(e)
+      })
     // Named scalar outputs bind directly (no digging into `result`); the raw
     // `result` is kept for anything unmodeled. tx_hash is the on-chain hash or
     // empty — never the ForDefi UUID.
@@ -151,8 +154,9 @@ const router = createCommandRouter({
     core.setOutput('state', outcome.state)
     core.setOutput('explorer_url', outcome.explorer_url)
     setJsonOutput('result', result)
-    // Fail only on a definitive non-settlement; an in-flight or on-chain tx
-    // succeeds and the consumer confirms finality (and reversion) from the chain.
+    // Fail on a definitive non-settlement or a response naming no transaction;
+    // an in-flight or on-chain tx succeeds and the consumer confirms finality
+    // (and reversion) from the chain.
     assertNotFailed(outcome)
   },
   // One raw contract call out of a vault: the caller supplies the calldata,

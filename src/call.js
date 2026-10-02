@@ -14,7 +14,8 @@
  */
 
 import { W3ActionError } from '@w3-io/action-core'
-import { failedDefinitively, parseAddress, parseBaseUnits } from './transfer.js'
+import { assertNamed, failedDefinitively } from './outcome.js'
+import { parseAddress, parseBaseUnits } from './transfer.js'
 
 /** The canonical textual UUID, any version. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -75,44 +76,13 @@ export function buildCallPayload({ vaultId, chain, to, calldata, value, note }) 
 }
 
 /**
- * The error a failed create is reported by. A 4xx is ForDefi refusing the
- * request, and the step reports it with its status so a consumer can read
- * "nothing was created" from it. That reading holds only when the refusal
- * answers the first request that could have been processed: after a timeout
- * or a 5xx the retried request carries a key ForDefi may already hold a
- * transaction under, and what it answers to a repeated key is not something
- * a refusal can be told apart from. Such a refusal is reported with no
- * status, as the unknown it is.
- */
-export function createFailure(err) {
-  const refused =
-    err instanceof W3ActionError &&
-    err.code === 'HTTP_ERROR' &&
-    err.statusCode >= 400 &&
-    err.statusCode < 500
-  if (refused && err.details?.unsettled) {
-    return new W3ActionError(
-      'AMBIGUOUS_CREATE',
-      `create was refused after an earlier attempt went unanswered, so a transaction may exist under the idempotence key: ${err.message}`,
-    )
-  }
-  return err
-}
-
-/**
  * Fail the step on the two outcomes of a create that answered: a response
- * that names no transaction, and a transaction already in a state ForDefi
- * names as a definitive non-settlement. Every other state passes, the same
- * boundary `assertNotFailed` draws for a transfer.
- *
- * A response with no id is a failure of a different kind than a refused
- * request: the custodian answered 2xx, so a transaction may exist that this
- * step cannot name.
+ * that names no transaction (`assertNamed`), and a transaction already in a
+ * state ForDefi names as a definitive non-settlement. Every other state
+ * passes, the same boundary `assertNotFailed` draws for a transfer.
  */
 export function assertCallCreated(outcome) {
-  if (!outcome.transaction_id) {
-    throw new W3ActionError('INVALID_RESPONSE', 'ForDefi created a transaction and returned no id')
-  }
+  assertNamed(outcome)
   if (failedDefinitively(outcome.state)) {
     throw new W3ActionError(
       'CALL_FAILED',

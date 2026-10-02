@@ -8,7 +8,7 @@
 import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
 import { ForDefiClient, setBridgeSigner } from './client.js'
-import { assertCallCreated, buildCallPayload, parseIdempotenceId } from './call.js'
+import { assertCallCreated, buildCallPayload, parseIdempotenceId, parseNotAfter } from './call.js'
 import { createFailure, extractOutcome } from './outcome.js'
 import { assertNotFailed, buildTransferPayload } from './transfer.js'
 
@@ -159,21 +159,23 @@ const router = createCommandRouter({
     // (and reversion) from the chain.
     assertNotFailed(outcome)
   },
-  // One raw contract call out of a vault: the caller supplies the calldata,
-  // the idempotence key makes the create happen at most once, and the step
+  // One raw transaction out of a vault: the caller supplies the calldata (or
+  // none, for a plain transfer), the idempotence key makes the create happen
+  // at most once, no create is sent at or after the deadline, and the step
   // returns on creation without waiting for approval, signing or mining.
   'call-contract': async () => {
     const idempotenceId = parseIdempotenceId(core.getInput('idempotence-id'))
+    const notAfter = parseNotAfter(core.getInput('not-after'))
     const payload = buildCallPayload({
       vaultId: req('vault-id'),
       chain: req('chain'),
       to: req('to'),
-      calldata: req('calldata'),
+      calldata: core.getInput('calldata') || undefined,
       value: core.getInput('value') || undefined,
       note: core.getInput('note') || undefined,
     })
     const result = await getClient()
-      .createTransaction(payload, { idempotenceId })
+      .createTransaction(payload, { idempotenceId, notAfter })
       .catch((e) => {
         throw createFailure(e)
       })

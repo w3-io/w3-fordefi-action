@@ -249,6 +249,41 @@ describe('transfer: assertNotFailed', () => {
   })
 })
 
+describe('ForDefiClient: send deadline', () => {
+  const signer = () =>
+    generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+
+  it('sends nothing at or after the deadline', async () => {
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    for (const notAfter of [Date.now() - 1, Date.now()]) {
+      await assert.rejects(
+        () => client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter }),
+        (err) =>
+          err instanceof W3ActionError &&
+          err.code === 'DEADLINE_PASSED' &&
+          err.statusCode === undefined &&
+          err.details.unsettled === false,
+      )
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it('sends before the deadline', async () => {
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const result = await client.createTransaction(
+      { vault_id: 'v' },
+      { idempotenceId: 'k', notAfter: Date.now() + 60_000 },
+    )
+    assert.equal(result.id, 'fd')
+    assert.equal(calls.length, 1)
+  })
+})
+
 describe('ForDefiClient: idempotency', () => {
   it('sets x-idempotence-id when a key is given', async () => {
     mockFetch([{ body: { ok: true } }])

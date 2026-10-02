@@ -192,12 +192,14 @@ commands:
 
   - name: call-contract
     description: >
-      One raw EVM contract call out of a vault. Takes the target contract,
-      the calldata and the native value, builds the ForDefi payload, and
-      creates the transaction under a required idempotence key. Returns on
-      creation: it does not wait for approval, signing or mining, so read
-      what became of the transaction by its id. ForDefi simulates at
-      create, and a call that would revert is refused with no transaction.
+      One raw EVM transaction out of a vault. Takes the target, the calldata
+      and the native value, builds the ForDefi payload, and creates the
+      transaction under a required idempotence key and a required deadline:
+      no create request is sent at or after not-after. With no calldata it
+      is a plain transfer of the chain coin. Returns on creation: it does
+      not wait for approval, signing or mining, so read what became of the
+      transaction by its id. ForDefi simulates at create, and a call that
+      would revert is refused with no transaction.
     inputs:
       vault-id:
         type: string
@@ -213,8 +215,12 @@ commands:
         description: Contract called (0x-prefixed)
       calldata:
         type: string
+        required: false
+        description: '0x-prefixed hex of whole bytes, at least the 4-byte function selector; empty for a plain transfer, which needs a positive value'
+      not-after:
+        type: string
         required: true
-        description: '0x-prefixed hex of whole bytes, at least the 4-byte function selector'
+        description: 'Deadline as an RFC 3339 UTC instant (e.g. 2026-10-02T20:15:00.000Z); no create request is sent at or after it'
       value:
         type: string
         required: false

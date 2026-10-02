@@ -34,7 +34,8 @@ function parseOutputs(text) {
 /**
  * Start the stand-in. `run(inputs, response)` runs the action once with
  * `inputs` (an `undefined` value leaves the input unset) and answers every
- * request with `response`, or with `response(n)` for the n-th request. It
+ * request with `response` (`{ status, json, headers?, delayMs? }`, the last
+ * holding the answer back), or with `response(n)` for the n-th request. It
  * resolves to the exit code, stdout, the step outputs and the requests the
  * stand-in received. `close()` stops the server.
  */
@@ -53,10 +54,21 @@ export async function startStandIn() {
     req.on('data', (c) => (body += c))
     req.on('end', () => {
       requests.push({ method: req.method, url: req.url, headers: req.headers, body })
-      const { status, json } = respond(requests.length)
-      // A zero retry-after keeps a retried attempt from waiting out the backoff.
-      res.writeHead(status, { 'content-type': 'application/json', 'retry-after': '0' })
-      res.end(JSON.stringify(json))
+      const { status, json, headers, delayMs = 0 } = respond(requests.length)
+      const answer = () => {
+        // A zero retry-after keeps a retried attempt from waiting out the
+        // backoff, unless the response sets its own.
+        res.writeHead(status, {
+          'content-type': 'application/json',
+          'retry-after': '0',
+          ...headers,
+        })
+        res.end(JSON.stringify(json))
+      }
+      // Unreferenced, so an answer still held back when the tests end does
+      // not keep the process alive.
+      if (delayMs) setTimeout(answer, delayMs).unref()
+      else answer()
     })
   })
   await new Promise((r) => server.listen(0, '127.0.0.1', r))

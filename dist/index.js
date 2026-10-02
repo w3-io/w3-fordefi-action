@@ -28037,12 +28037,36 @@ const RETRY_DELAY_MS = 1000
  * `retryUnsettled: false` retries a 429 and nothing else. It is for a request
  * that is not safe to repeat: a create sent without an idempotence key, where
  * a second request after an unanswered first can create a second transaction.
+ *
+ * `notAfter` (epoch milliseconds) is a deadline on sending. No attempt
+ * begins at or after it; a wait that would end at or after it is not waited
+ * out; and an attempt still in flight when it arrives is abandoned there.
+ * Each of the three is reported as `DEADLINE_PASSED`. So this function sends
+ * nothing at or after the deadline, whatever a `Retry-After` header asks
+ * for. The clock is this process's.
  */
-async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled = true } = {}) {
+async function fetchWithRetry(
+  url,
+  opts,
+  { retries = MAX_RETRIES, retryUnsettled = true, notAfter } = {},
+) {
   let unsettled = false
+  const refuseAtDeadline = (wait = 0) => {
+    if (notAfter === undefined || Date.now() + wait < notAfter) return
+    throw new error_W3ActionError(
+      'DEADLINE_PASSED',
+      `not sent: the deadline ${new Date(notAfter).toISOString()} ${wait ? 'would pass before the next attempt' : 'has passed'}` +
+        (unsettled
+          ? '; an earlier attempt went unanswered, so a transaction may exist under the idempotence key'
+          : ''),
+      { details: { unsettled } },
+    )
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
+    refuseAtDeadline()
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    const budget = notAfter === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, notAfter - Date.now())
+    const timer = setTimeout(() => controller.abort(), budget)
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })
       clearTimeout(timer)
@@ -28054,6 +28078,7 @@ async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled
           ? retrySeconds * 1000
           : RETRY_DELAY_MS * 2 ** attempt
         if (res.status >= 500) unsettled = true
+        refuseAtDeadline(delay)
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
@@ -28061,13 +28086,19 @@ async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled
     } catch (e) {
       clearTimeout(timer)
       const timedOut = e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT'
-      if (timedOut && retryUnsettled && attempt < retries) {
+      if (timedOut) {
         unsettled = true
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
-        continue
+        if (retryUnsettled && attempt < retries) {
+          const delay = RETRY_DELAY_MS * 2 ** attempt
+          refuseAtDeadline(delay)
+          await new Promise((r) => setTimeout(r, delay))
+          continue
+        }
+        // An attempt the deadline cut short reports the deadline.
+        refuseAtDeadline()
       }
       if (e.name === 'AbortError') {
-        throw new error_W3ActionError('TIMEOUT', `Request timed out after ${TIMEOUT_MS}ms: ${url}`)
+        throw new error_W3ActionError('TIMEOUT', `Request timed out after ${budget}ms: ${url}`)
       }
       throw e
     }
@@ -28130,7 +28161,7 @@ class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true } = {}) {
+  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true, notAfter } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
     // ForDefi dedups transaction creation on the x-idempotence-id header (a
@@ -28146,7 +28177,10 @@ class ForDefiClient {
       headers['x-timestamp'] = timestamp
     }
 
-    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, { retryUnsettled })
+    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, {
+      retryUnsettled,
+      notAfter,
+    })
   }
 
   async put(path, payload, { sign = false } = {}) {
@@ -28293,10 +28327,11 @@ class ForDefiClient {
   createTransactionAndWait(p, opts) {
     return this.#create('/api/v1/transactions/create-and-wait', p, opts)
   }
-  #create(path, p, { idempotenceId } = {}) {
+  #create(path, p, { idempotenceId, notAfter } = {}) {
     return this.post(path, p, {
       sign: true,
       idempotenceId,
+      notAfter,
       retryUnsettled: Boolean(idempotenceId),
     })
   }
@@ -28742,18 +28777,23 @@ function assertNotFailed(outcome) {
 
 ;// CONCATENATED MODULE: ./src/call.js
 /**
- * call-contract — one raw EVM contract call out of a vault, from primitives.
+ * call-contract — one raw EVM transaction out of a vault, from primitives.
  *
  * The caller owns the calldata: this command neither encodes nor decodes it,
- * so it carries any function of any contract. It builds the ForDefi payload
- * around the bytes, creates the transaction, and returns. It does not wait:
- * a transaction may sit in `waiting_for_approval` for as long as a human
- * takes, and the consumer reads what became of it from ForDefi by the
- * transaction id and from the chain by the receipt.
+ * so it carries any function of any contract, and with no calldata it is a
+ * plain transfer of the chain coin. It builds the ForDefi payload around the
+ * bytes, creates the transaction, and returns. It does not wait: a
+ * transaction may sit in `waiting_for_approval` for as long as a human takes,
+ * and the consumer reads what became of it from ForDefi and from the chain.
  *
  * The idempotence key is required. The client retries a create on a timeout
  * or a 5xx, and only the key makes the retried request name the transaction
  * the first one created.
+ *
+ * The deadline is required. A step can run long after it was triggered, and
+ * more than one run can carry one key, so a consumer that finds no
+ * transaction under the key learns nothing unless it also knows no create can
+ * still be sent. `not-after` is that bound: no create leaves at or after it.
  */
 
 
@@ -28765,6 +28805,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Whole bytes, at least the four of a function selector. */
 const CALLDATA = /^0x(?:[0-9a-f]{2}){4,}$/
+
+/** An RFC 3339 instant in UTC, with up to nanosecond fractions. */
+const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/
 
 /** Parse the idempotence key: ForDefi takes a UUID and nothing else. */
 function parseIdempotenceId(value) {
@@ -28778,6 +28821,25 @@ function parseIdempotenceId(value) {
     throw new error_W3ActionError('INVALID_IDEMPOTENCE_ID', 'idempotence-id must be a UUID')
   }
   return s
+}
+
+/**
+ * Parse the deadline to epoch milliseconds. Fractions past the millisecond
+ * are dropped, which moves the deadline earlier and never later.
+ */
+function parseNotAfter(value) {
+  const s = String(value ?? '').trim()
+  if (!s) {
+    throw new error_W3ActionError('MISSING_INPUT', 'not-after is required for call-contract')
+  }
+  const ms = INSTANT.test(s) ? Date.parse(s.replace(/(\.\d{3})\d+Z$/, '$1Z')) : NaN
+  if (!Number.isFinite(ms)) {
+    throw new error_W3ActionError(
+      'INVALID_NOT_AFTER',
+      'not-after must be an RFC 3339 UTC instant, e.g. 2026-10-02T20:15:00.000Z',
+    )
+  }
+  return ms
 }
 
 /** Normalize calldata to lowercase hex, or fail loud. */
@@ -28795,13 +28857,20 @@ function parseCalldata(value) {
 }
 
 /**
- * Build the ForDefi create-transaction payload for a call from `vaultId` to
- * the contract at `to`. `value` is the native coin sent with the call, in
- * base units; a call that pays nothing sends "0".
+ * Build the ForDefi create-transaction payload for a transaction from
+ * `vaultId` to `to`. `value` is the native coin sent, in base units; a call
+ * that pays nothing sends "0". With no `calldata` the transaction is a plain
+ * transfer of `value`, and it must then send something: a transaction with
+ * neither calldata nor value does nothing but spend gas.
  */
 function buildCallPayload({ vaultId, chain, to, calldata, value, note }) {
   if (!vaultId) throw new error_W3ActionError('MISSING_INPUT', 'vault-id is required')
   if (!chain) throw new error_W3ActionError('MISSING_INPUT', 'chain is required')
+  const units = parseBaseUnits(value ?? '0', 'value')
+  const hex = calldata ? parseCalldata(calldata) : null
+  if (hex === null && units === 0n) {
+    throw new error_W3ActionError('MISSING_INPUT', 'calldata or a positive value is required')
+  }
   return {
     vault_id: vaultId,
     signer_type: 'api_signer',
@@ -28810,8 +28879,8 @@ function buildCallPayload({ vaultId, chain, to, calldata, value, note }) {
       type: 'evm_raw_transaction',
       chain,
       to: parseAddress(to, 'to'),
-      value: parseBaseUnits(value ?? '0', 'value').toString(10),
-      data: { type: 'hex', hex_data: parseCalldata(calldata) },
+      value: units.toString(10),
+      ...(hex === null ? {} : { data: { type: 'hex', hex_data: hex } }),
       gas: { type: 'priority', priority_level: 'medium' },
     },
     ...(note ? { note } : {}),
@@ -28996,21 +29065,23 @@ const router = createCommandRouter({
     // (and reversion) from the chain.
     assertNotFailed(outcome)
   },
-  // One raw contract call out of a vault: the caller supplies the calldata,
-  // the idempotence key makes the create happen at most once, and the step
+  // One raw transaction out of a vault: the caller supplies the calldata (or
+  // none, for a plain transfer), the idempotence key makes the create happen
+  // at most once, no create is sent at or after the deadline, and the step
   // returns on creation without waiting for approval, signing or mining.
   'call-contract': async () => {
     const idempotenceId = parseIdempotenceId(lib_core.getInput('idempotence-id'))
+    const notAfter = parseNotAfter(lib_core.getInput('not-after'))
     const payload = buildCallPayload({
       vaultId: req('vault-id'),
       chain: req('chain'),
       to: req('to'),
-      calldata: req('calldata'),
+      calldata: lib_core.getInput('calldata') || undefined,
       value: lib_core.getInput('value') || undefined,
       note: lib_core.getInput('note') || undefined,
     })
     const result = await getClient()
-      .createTransaction(payload, { idempotenceId })
+      .createTransaction(payload, { idempotenceId, notAfter })
       .catch((e) => {
         throw createFailure(e)
       })

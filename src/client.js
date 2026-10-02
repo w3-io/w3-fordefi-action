@@ -38,12 +38,36 @@ const RETRY_DELAY_MS = 1000
  * `retryUnsettled: false` retries a 429 and nothing else. It is for a request
  * that is not safe to repeat: a create sent without an idempotence key, where
  * a second request after an unanswered first can create a second transaction.
+ *
+ * `notAfter` (epoch milliseconds) is a deadline on sending. No attempt
+ * begins at or after it; a wait that would end at or after it is not waited
+ * out; and an attempt still in flight when it arrives is abandoned there.
+ * Each of the three is reported as `DEADLINE_PASSED`. So this function sends
+ * nothing at or after the deadline, whatever a `Retry-After` header asks
+ * for. The clock is this process's.
  */
-async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled = true } = {}) {
+async function fetchWithRetry(
+  url,
+  opts,
+  { retries = MAX_RETRIES, retryUnsettled = true, notAfter } = {},
+) {
   let unsettled = false
+  const refuseAtDeadline = (wait = 0) => {
+    if (notAfter === undefined || Date.now() + wait < notAfter) return
+    throw new W3ActionError(
+      'DEADLINE_PASSED',
+      `not sent: the deadline ${new Date(notAfter).toISOString()} ${wait ? 'would pass before the next attempt' : 'has passed'}` +
+        (unsettled
+          ? '; an earlier attempt went unanswered, so a transaction may exist under the idempotence key'
+          : ''),
+      { details: { unsettled } },
+    )
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
+    refuseAtDeadline()
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    const budget = notAfter === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, notAfter - Date.now())
+    const timer = setTimeout(() => controller.abort(), budget)
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })
       clearTimeout(timer)
@@ -55,6 +79,7 @@ async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled
           ? retrySeconds * 1000
           : RETRY_DELAY_MS * 2 ** attempt
         if (res.status >= 500) unsettled = true
+        refuseAtDeadline(delay)
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
@@ -62,13 +87,19 @@ async function fetchWithRetry(url, opts, { retries = MAX_RETRIES, retryUnsettled
     } catch (e) {
       clearTimeout(timer)
       const timedOut = e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT'
-      if (timedOut && retryUnsettled && attempt < retries) {
+      if (timedOut) {
         unsettled = true
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
-        continue
+        if (retryUnsettled && attempt < retries) {
+          const delay = RETRY_DELAY_MS * 2 ** attempt
+          refuseAtDeadline(delay)
+          await new Promise((r) => setTimeout(r, delay))
+          continue
+        }
+        // An attempt the deadline cut short reports the deadline.
+        refuseAtDeadline()
       }
       if (e.name === 'AbortError') {
-        throw new W3ActionError('TIMEOUT', `Request timed out after ${TIMEOUT_MS}ms: ${url}`)
+        throw new W3ActionError('TIMEOUT', `Request timed out after ${budget}ms: ${url}`)
       }
       throw e
     }
@@ -131,7 +162,7 @@ export class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true } = {}) {
+  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true, notAfter } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
     // ForDefi dedups transaction creation on the x-idempotence-id header (a
@@ -147,7 +178,10 @@ export class ForDefiClient {
       headers['x-timestamp'] = timestamp
     }
 
-    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, { retryUnsettled })
+    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, {
+      retryUnsettled,
+      notAfter,
+    })
   }
 
   async put(path, payload, { sign = false } = {}) {
@@ -294,10 +328,11 @@ export class ForDefiClient {
   createTransactionAndWait(p, opts) {
     return this.#create('/api/v1/transactions/create-and-wait', p, opts)
   }
-  #create(path, p, { idempotenceId } = {}) {
+  #create(path, p, { idempotenceId, notAfter } = {}) {
     return this.post(path, p, {
       sign: true,
       idempotenceId,
+      notAfter,
       retryUnsettled: Boolean(idempotenceId),
     })
   }

@@ -156,9 +156,9 @@ Create a transaction and wait for it to reach a target state.
 
 #### call-contract (signing)
 
-Make one raw EVM contract call out of a vault. The caller supplies the calldata; the command builds the ForDefi payload around it and creates the transaction.
+Send one raw EVM transaction out of a vault. The caller supplies the calldata; the command builds the ForDefi payload around it and creates the transaction. With no calldata it is a plain transfer of the chain coin.
 
-**Inputs:** `vault-id`, `chain`, `to`, `calldata`, `idempotence-id` (all required), `value` (default `0`), `note`
+**Inputs:** `vault-id`, `chain`, `to`, `idempotence-id`, `not-after` (all required), `calldata`, `value` (default `0`), `note`
 
 **Outputs:** `transaction_id`, `state`, `tx_hash`, `explorer_url`, `result`
 
@@ -174,22 +174,57 @@ Make one raw EVM contract call out of a vault. The caller supplies the calldata;
     to: '0x061329361E0f163125225bf71a1E5AF954b46869'
     calldata: ${{ inputs.calldata }}
     idempotence-id: ${{ inputs.call_id }}
+    not-after: ${{ inputs.not_after }}
 ```
 
 The step returns when ForDefi has created the transaction. It does not wait for approval, signing or mining: under an approval policy a transaction stays in `waiting_for_approval` until a person acts, so `state` is the state at creation and `tx_hash` is empty unless ForDefi already has a hash. Read what became of the transaction with `get-transaction`, and confirm settlement from the chain.
+
+`calldata` is 0x-prefixed hex of whole bytes, at least the 4-byte function selector. Left empty, the transaction carries no data and transfers `value` of the chain coin to `to`; `value` must then be positive. A transaction with neither calldata nor value is refused before any request.
 
 `idempotence-id` is a UUID and is required. The client retries a create that times out or answers 5xx, and the key is what makes the retry name the transaction the first attempt created.
 
 ForDefi simulates the call at create. A call that would revert (a deposit with no allowance, for example) is refused with HTTP 400 and `error_type: reverted_transaction`, and no transaction exists.
 
-What a failed step says about the custodian:
+##### The deadline
+
+`not-after` is an RFC 3339 UTC instant (`2026-10-02T20:15:00.000Z`) and is required.
+
+**Guarantee: the step sends nothing to ForDefi at or after `not-after`. The latest possible send is strictly before it.**
+
+Three rules give it, each read against the step's own clock:
+
+1. No attempt begins at or after the deadline. The check runs immediately before every attempt, the first and each retry alike, after the request has been signed.
+2. A retry wait that would end at or after the deadline is not waited out, whether it is the client's backoff or a `Retry-After` the server asked for.
+3. An attempt still in flight at the deadline is abandoned there: the client closes the request rather than wait out its 30-second timeout.
+
+Each ends the step with `DEADLINE_PASSED`.
+
+The guarantee is about what the step sends, not about what ForDefi does with it. A request delivered just before the deadline is ForDefi's to finish, and under rule 3 the step may never learn what it made. The instant is read against the runner's clock, so a consumer that reasons from the deadline allows for the difference between that clock and its own, and for ForDefi's own time to process a request and list the transaction.
+
+A consumer uses it to make an absence conclusive. A step can run long after it was triggered, and more than one run can carry one key, so finding no transaction under a key proves nothing while a create could still be sent. After the deadline none can be, and what remains to allow for is ForDefi's processing of a request it already holds and the clock difference.
+
+Tests that pin it, in `test/call.test.js` and `test/fordefi.test.js`:
+
+| Test                                                           | What it pins                                                                     |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `sends nothing at or after the deadline`                       | The comparison is strict: a deadline equal to the present instant sends nothing. |
+| `sends nothing once the deadline has passed`                   | The step makes no request and fails with `DEADLINE_PASSED`.                      |
+| `does not wait out a retry that would reach the deadline`      | A `Retry-After` longer than the time left is refused, not slept, after a 5xx.    |
+| `does not wait out a rate limit that would reach the deadline` | The same after a 429.                                                            |
+| `abandons an attempt still in flight at the deadline`          | The client stops waiting at the deadline instead of at its 30-second timeout.    |
+| `retries inside the deadline`                                  | A retry that fits before the deadline is still sent.                             |
+
+##### What a failed step says
+
+Each row is a statement about this run alone. Another run under the same idempotence key may have created a transaction, so a consumer that needs to know whether one exists lists the vault's transactions and matches `managed_transaction_data.idempotence_id`.
 
 | Step outputs                                                                                                                                                                    | Meaning                                                                                                                                                                                                   |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `transaction_id` set, `error-code: CALL_FAILED`                                                                                                                                 | The transaction exists and is in a state ForDefi names as definitive failure (`aborted`, `error_signing`, `error_pushing_to_blockchain`, `dropped`, `cancelled`, `mined_reverted`, `completed_reverted`). |
-| no `transaction_id`, `error-code: HTTP_ERROR`, `status-code` 4xx                                                                                                                | ForDefi refused the request, and no earlier attempt in this step went unanswered. The step created nothing.                                                                                               |
+| no `transaction_id`, `error-code: HTTP_ERROR`, `status-code` 4xx                                                                                                                | ForDefi refused the request, and no earlier attempt in this step went unanswered. This run created nothing.                                                                                               |
+| no `transaction_id`, `error-code: DEADLINE_PASSED`                                                                                                                              | The deadline stopped the step. If the message says an earlier attempt went unanswered, that attempt may have been processed; otherwise this run sent nothing ForDefi could have processed.                |
 | no `transaction_id`, `error-code` one of `AMBIGUOUS_CREATE`, `TIMEOUT`, `INVALID_RESPONSE`, or `HTTP_ERROR` with `status-code` 5xx, or no `error-code` at all (a network error) | Unknown. A request may have reached ForDefi, so a transaction may exist under the idempotence key. `AMBIGUOUS_CREATE` is a 4xx that followed a timeout or a 5xx.                                          |
-| no `transaction_id`, an input error (`MISSING_INPUT`, `INVALID_ADDRESS`, `INVALID_AMOUNT`, `INVALID_CALLDATA`, `INVALID_IDEMPOTENCE_ID`, `MISSING_SIGNER`)                      | No request was sent.                                                                                                                                                                                      |
+| no `transaction_id`, an input error (`MISSING_INPUT`, `INVALID_ADDRESS`, `INVALID_AMOUNT`, `INVALID_CALLDATA`, `INVALID_IDEMPOTENCE_ID`, `INVALID_NOT_AFTER`, `MISSING_SIGNER`) | No request was sent.                                                                                                                                                                                      |
 
 #### transfer-out (signing)
 
@@ -214,7 +249,7 @@ Transfer the chain coin or an ERC-20 out of a vault to an external address. The 
     idempotence-id: ${{ inputs.withdrawal_id }}
 ```
 
-The step fails only on a state ForDefi names as definitive failure or on a response that names no transaction. A transfer still in flight when the wait ends succeeds, and the consumer confirms settlement from the chain. A failed step reads as the table under [call-contract](#call-contract-signing) says, with `TRANSFER_FAILED` in place of `CALL_FAILED`.
+The step fails only on a state ForDefi names as definitive failure or on a response that names no transaction. A transfer still in flight when the wait ends succeeds, and the consumer confirms settlement from the chain. A failed step reads as the table under [What a failed step says](#what-a-failed-step-says) has it, with `TRANSFER_FAILED` in place of `CALL_FAILED`; `transfer-out` takes no deadline.
 
 #### Retries and the idempotence key
 

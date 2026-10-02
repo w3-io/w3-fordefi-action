@@ -129,7 +129,13 @@ inputs:
   calldata:
     description: >-
       call-contract calldata: 0x-prefixed hex of whole bytes, at least the
-      4-byte function selector
+      4-byte function selector. Leave empty for a plain transfer of the chain
+      coin, which then needs a positive value
+    required: false
+  not-after:
+    description: >-
+      call-contract deadline, required: an RFC 3339 UTC instant such as
+      2026-10-02T20:15:00.000Z. No create request is sent at or after it
     required: false
   value:
     description: >-

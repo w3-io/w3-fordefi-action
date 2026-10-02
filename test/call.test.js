@@ -15,12 +15,16 @@ import {
   buildCallPayload,
   parseCalldata,
   parseIdempotenceId,
+  parseNotAfter,
 } from '../src/call.js'
 import { createFailure } from '../src/outcome.js'
 import { W3ActionError } from '@w3-io/action-core'
 import { startStandIn } from './harness.js'
 
 const VENUE = '0x061329361E0f163125225bf71a1E5AF954b46869'
+
+/** An instant `seconds` from now (negative: in the past), as an input. */
+const soon = (seconds) => new Date(Date.now() + seconds * 1000).toISOString()
 const KEY = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b'
 // deposit(uint256 5000000, address receiver)
 const CALLDATA =
@@ -47,6 +51,43 @@ describe('call: parseIdempotenceId', () => {
       assert.throws(
         () => parseIdempotenceId(v),
         (e) => e.code === 'INVALID_IDEMPOTENCE_ID',
+      )
+    }
+  })
+})
+
+describe('call: parseNotAfter', () => {
+  it('reads an RFC 3339 UTC instant as epoch milliseconds', () => {
+    assert.equal(parseNotAfter('2026-10-02T20:15:00.000Z'), Date.UTC(2026, 9, 2, 20, 15, 0))
+    assert.equal(parseNotAfter('2026-10-02T20:15:00Z'), Date.UTC(2026, 9, 2, 20, 15, 0))
+    assert.equal(parseNotAfter(' 2026-10-02T20:15:00.5Z '), Date.UTC(2026, 9, 2, 20, 15, 0, 500))
+  })
+
+  it('drops fractions past the millisecond, moving the deadline earlier', () => {
+    assert.equal(parseNotAfter('2026-10-02T20:15:00.123999Z'), Date.UTC(2026, 9, 2, 20, 15, 0, 123))
+  })
+
+  it('refuses an absent deadline', () => {
+    for (const v of ['', '  ', undefined, null]) {
+      assert.throws(
+        () => parseNotAfter(v),
+        (e) => e instanceof W3ActionError && e.code === 'MISSING_INPUT',
+      )
+    }
+  })
+
+  it('refuses a deadline that is not a UTC instant', () => {
+    for (const v of [
+      '2026-10-02T20:15:00+00:00',
+      '2026-10-02T20:15:00',
+      '2026-10-02',
+      '1790972100',
+      '2026-13-02T20:15:00Z',
+      'soon',
+    ]) {
+      assert.throws(
+        () => parseNotAfter(v),
+        (e) => e.code === 'INVALID_NOT_AFTER',
       )
     }
   })
@@ -93,6 +134,24 @@ describe('call: buildCallPayload', () => {
     assert.equal(buildCallPayload(base).details.value, '0')
     assert.equal(buildCallPayload({ ...base, value: '1000' }).details.value, '1000')
     assert.equal(buildCallPayload(base).note, undefined)
+  })
+
+  it('is a plain transfer of the chain coin when there is no calldata', () => {
+    for (const calldata of [undefined, '']) {
+      const p = buildCallPayload({ ...base, calldata, value: '1000' })
+      assert.equal(p.details.value, '1000')
+      assert.equal('data' in p.details, false)
+      assert.equal(p.details.to, VENUE.toLowerCase())
+    }
+  })
+
+  it('refuses a transaction with neither calldata nor value', () => {
+    for (const value of [undefined, '0']) {
+      assert.throws(
+        () => buildCallPayload({ ...base, calldata: undefined, value }),
+        (e) => e.code === 'MISSING_INPUT',
+      )
+    }
   })
 
   it('refuses a bad target, value, or calldata, and a missing vault or chain', () => {
@@ -191,6 +250,7 @@ describe('call-contract: the step', () => {
         to: VENUE,
         calldata: CALLDATA,
         'idempotence-id': KEY,
+        'not-after': soon(3600),
         ...inputs,
       },
       response,
@@ -287,6 +347,96 @@ describe('call-contract: the step', () => {
     assert.equal(requests.length, 0)
     assert.equal(r.outputs.transaction_id, undefined)
     assert.equal(r.outputs['error-code'], 'MISSING_INPUT')
+  })
+
+  it('sends a plain transfer when there is no calldata', async () => {
+    const r = await run(
+      { calldata: undefined, value: '1000' },
+      { status: 201, json: { id: 'fd-uuid', state: 'approved' } },
+    )
+    assert.equal(r.code, 0)
+    const body = JSON.parse(requests[0].body)
+    assert.equal(body.details.value, '1000')
+    assert.equal('data' in body.details, false)
+  })
+
+  it('refuses a missing deadline before any request', async () => {
+    const r = await run({ 'not-after': undefined }, { status: 201, json: { id: 'x' } })
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 0)
+    assert.equal(r.outputs['error-code'], 'MISSING_INPUT')
+  })
+
+  it('refuses a malformed deadline before any request', async () => {
+    const r = await run({ 'not-after': 'tomorrow' }, { status: 201, json: { id: 'x' } })
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 0)
+    assert.equal(r.outputs['error-code'], 'INVALID_NOT_AFTER')
+  })
+
+  it('sends nothing once the deadline has passed', async () => {
+    const r = await run({ 'not-after': soon(-1) }, { status: 201, json: { id: 'x' } })
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 0)
+    assert.equal(r.outputs.transaction_id, undefined)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+    assert.equal(r.outputs['status-code'], undefined)
+  })
+
+  it('does not wait out a retry that would reach the deadline', async () => {
+    // The stand-in asks for a 60 s wait and the deadline is 20 s away. The
+    // step refuses at once: it neither sleeps past the deadline nor sends
+    // after it, and it says the first attempt went unanswered.
+    const started = Date.now()
+    const r = await run(
+      { 'not-after': soon(20) },
+      { status: 503, json: {}, headers: { 'retry-after': '60' } },
+    )
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 1)
+    assert.ok(Date.now() - started < 10_000)
+    assert.equal(r.outputs.transaction_id, undefined)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+    assert.match(r.stdout, /an earlier attempt went unanswered/)
+  })
+
+  it('does not wait out a rate limit that would reach the deadline', async () => {
+    const r = await run(
+      { 'not-after': soon(20) },
+      { status: 429, json: {}, headers: { 'retry-after': '60' } },
+    )
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 1)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+    assert.doesNotMatch(r.stdout, /went unanswered/)
+  })
+
+  it('abandons an attempt still in flight at the deadline', async () => {
+    // The stand-in holds its answer for 30 s and the deadline is 2 s away.
+    // The step stops waiting at the deadline, sends nothing more, and says
+    // the attempt went unanswered.
+    const started = Date.now()
+    const r = await run(
+      { 'not-after': soon(2) },
+      { status: 201, json: { id: 'fd-uuid', state: 'approved' }, delayMs: 30_000 },
+    )
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 1)
+    assert.ok(Date.now() - started < 10_000)
+    assert.equal(r.outputs.transaction_id, undefined)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+    assert.match(r.stdout, /an earlier attempt went unanswered/)
+  })
+
+  it('retries inside the deadline', async () => {
+    const r = await run({ 'not-after': soon(20) }, (n) =>
+      n === 1
+        ? { status: 503, json: {} }
+        : { status: 201, json: { id: 'fd-uuid', state: 'approved' } },
+    )
+    assert.equal(r.code, 0)
+    assert.equal(requests.length, 2)
+    assert.equal(r.outputs.transaction_id, 'fd-uuid')
   })
 
   it('refuses malformed calldata before any request', async () => {

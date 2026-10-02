@@ -190,6 +190,60 @@ commands:
         type: object
         description: 'Raw ForDefi transaction {id, hash, state, explorer_url, ...}'
 
+  - name: call-contract
+    description: >
+      One raw EVM contract call out of a vault. Takes the target contract,
+      the calldata and the native value, builds the ForDefi payload, and
+      creates the transaction under a required idempotence key. Returns on
+      creation: it does not wait for approval, signing or mining, so read
+      what became of the transaction by its id. ForDefi simulates at
+      create, and a call that would revert is refused with no transaction.
+    inputs:
+      vault-id:
+        type: string
+        required: true
+        description: Source ForDefi vault ID
+      chain:
+        type: string
+        required: true
+        description: 'ForDefi chain id (e.g. ethereum_mainnet, avalanche_chain)'
+      to:
+        type: string
+        required: true
+        description: Contract called (0x-prefixed)
+      calldata:
+        type: string
+        required: true
+        description: '0x-prefixed hex of whole bytes, at least the 4-byte function selector'
+      value:
+        type: string
+        required: false
+        description: 'Native coin sent with the call, in base units (decimal integer); default 0'
+      idempotence-id:
+        type: string
+        required: true
+        description: 'UUID set as the ForDefi x-idempotence-id header; a repeat creates at most one transaction'
+      note:
+        type: string
+        required: false
+        description: Optional human-readable note on the transaction
+    outputs:
+      tx_hash:
+        type: string
+        description: On-chain transaction hash, or empty where ForDefi has none yet (never the ForDefi UUID)
+      transaction_id:
+        type: string
+        description: ForDefi transaction UUID
+      state:
+        type: string
+        description: 'ForDefi transaction state at creation, e.g. waiting_for_approval'
+      explorer_url:
+        type: string
+        description: Block-explorer URL for the transaction
+      result:
+        type: object
+        description: 'Raw ForDefi transaction {id, hash, state, explorer_url, ...}'
+
   - name: predict-transaction
     description: >
       Simulate a transaction before submitting — returns fee estimate,
@@ -399,6 +453,24 @@ display:
         - { label: 'To', value: '{{ inputs.to | truncate_addr }}' }
         - { label: 'Asset', value: "{{ inputs.asset | default: 'native' }}" }
         - { label: 'Amount', value: '{{ inputs.amount }}' }
+        - { label: 'Signer', value: 'ForDefi MPC' }
+        - { label: 'State', value: '{{ outputs.state }}' }
+      chain_path: 'inputs.chain'
+      destination_brand_path: 'inputs.to'
+      tx_hash_path: 'outputs.tx_hash'
+      chain_explorer:
+        ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
+        avalanche_chain: 'https://snowtrace.io/tx/{{tx_hash}}'
+        base_mainnet: 'https://basescan.org/tx/{{tx_hash}}'
+        ethereum_sepolia: 'https://sepolia.etherscan.io/tx/{{tx_hash}}'
+
+    call-contract:
+      icon: 'send'
+      title_template: "{{ inputs.note | default: 'Contract call' }}"
+      subtitle_template: 'to {{ inputs.to | truncate_addr }}'
+      summary:
+        - { label: 'Contract', value: '{{ inputs.to | truncate_addr }}' }
+        - { label: 'Action', value: '{{ inputs.calldata | decode_calldata_action }}' }
         - { label: 'Signer', value: 'ForDefi MPC' }
         - { label: 'State', value: '{{ outputs.state }}' }
       chain_path: 'inputs.chain'

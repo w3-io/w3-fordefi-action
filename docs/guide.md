@@ -154,6 +154,43 @@ Create a transaction and wait for it to reach a target state.
 
 **Inputs:** `data`, `private-key`
 
+#### call-contract (signing)
+
+Make one raw EVM contract call out of a vault. The caller supplies the calldata; the command builds the ForDefi payload around it and creates the transaction.
+
+**Inputs:** `vault-id`, `chain`, `to`, `calldata`, `idempotence-id` (all required), `value` (default `0`), `note`
+
+**Outputs:** `transaction_id`, `state`, `tx_hash`, `explorer_url`, `result`
+
+```yaml
+- uses: w3-io/w3-fordefi-action@v0
+  id: call
+  with:
+    command: call-contract
+    access-token: ${{ secrets.FORDEFI_ACCESS_TOKEN }}
+    private-key: ${{ secrets.FORDEFI_PRIVATE_KEY }}
+    vault-id: ${{ inputs.vault_id }}
+    chain: avalanche_chain
+    to: '0x061329361E0f163125225bf71a1E5AF954b46869'
+    calldata: ${{ inputs.calldata }}
+    idempotence-id: ${{ inputs.call_id }}
+```
+
+The step returns when ForDefi has created the transaction. It does not wait for approval, signing or mining: under an approval policy a transaction stays in `waiting_for_approval` until a person acts, so `state` is the state at creation and `tx_hash` is empty unless ForDefi already has a hash. Read what became of the transaction with `get-transaction`, and confirm settlement from the chain.
+
+`idempotence-id` is a UUID and is required. The client retries a create that times out or answers 5xx, and the key is what makes the retry name the transaction the first attempt created.
+
+ForDefi simulates the call at create. A call that would revert (a deposit with no allowance, for example) is refused with HTTP 400 and `error_type: reverted_transaction`, and no transaction exists.
+
+What a failed step says about the custodian:
+
+| Step outputs                                                                                                                                                                    | Meaning                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `transaction_id` set, `error-code: CALL_FAILED`                                                                                                                                 | The transaction exists and is in a state ForDefi names as definitive failure (`aborted`, `error_signing`, `error_pushing_to_blockchain`, `dropped`, `cancelled`, `mined_reverted`, `completed_reverted`). |
+| no `transaction_id`, `error-code: HTTP_ERROR`, `status-code` 4xx                                                                                                                | ForDefi refused the request, and no earlier attempt in this step went unanswered. The step created nothing.                                                                                               |
+| no `transaction_id`, `error-code` one of `AMBIGUOUS_CREATE`, `TIMEOUT`, `INVALID_RESPONSE`, or `HTTP_ERROR` with `status-code` 5xx, or no `error-code` at all (a network error) | Unknown. A request may have reached ForDefi, so a transaction may exist under the idempotence key. `AMBIGUOUS_CREATE` is a 4xx that followed a timeout or a 5xx.                                          |
+| no `transaction_id`, an input error (`MISSING_INPUT`, `INVALID_ADDRESS`, `INVALID_AMOUNT`, `INVALID_CALLDATA`, `INVALID_IDEMPOTENCE_ID`, `MISSING_SIGNER`)                      | No request was sent.                                                                                                                                                                                      |
+
 #### predict-transaction (signing)
 
 Simulate a transaction before execution. Returns fee estimates, effect predictions, revert detection, risk screening results, and policy matching.

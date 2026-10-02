@@ -21,7 +21,7 @@ const ERC20_TRANSFER_SELECTOR = 'a9059cbb'
 const UINT256_LIMIT = 1n << 256n
 
 /** Normalize a 0x-prefixed 20-byte address to lowercase, or fail loud. */
-function parseAddress(value, label) {
+export function parseAddress(value, label) {
   const s = String(value ?? '')
     .trim()
     .toLowerCase()
@@ -33,14 +33,17 @@ function parseAddress(value, label) {
 }
 
 /** Parse a base-unit amount: non-negative integer, in-range for a uint256. */
-function parseBaseUnits(value) {
+export function parseBaseUnits(value, label = 'amount') {
   const s = String(value ?? '').trim()
   if (!/^\d+$/.test(s)) {
-    throw new W3ActionError('INVALID_AMOUNT', 'amount must be a base-unit integer (decimal digits)')
+    throw new W3ActionError(
+      'INVALID_AMOUNT',
+      `${label} must be a base-unit integer (decimal digits)`,
+    )
   }
   const amt = BigInt(s)
   if (amt >= UINT256_LIMIT) {
-    throw new W3ActionError('INVALID_AMOUNT', 'amount exceeds uint256')
+    throw new W3ActionError('INVALID_AMOUNT', `${label} exceeds uint256`)
   }
   return amt
 }
@@ -111,7 +114,7 @@ export function extractOutcome(result) {
   }
 }
 
-/** Definitive non-settlement states: ForDefi reports the transfer will not
+/** Definitive non-settlement states: ForDefi reports the transaction will not
  *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
  *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
  *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
@@ -126,6 +129,11 @@ const TERMINAL_FAILURE = new Set([
   'completed_reverted',
 ])
 
+/** Whether `state` is one ForDefi names as a definitive non-settlement. */
+export function failedDefinitively(state) {
+  return TERMINAL_FAILURE.has(state)
+}
+
 /**
  * Fail the step only when the transfer definitively did not settle. Money
  * moving is confirmed downstream from the chain (the consumer re-reads the
@@ -137,7 +145,7 @@ const TERMINAL_FAILURE = new Set([
  * on a state ForDefi names as terminal-failed.
  */
 export function assertNotFailed(outcome) {
-  if (TERMINAL_FAILURE.has(outcome.state)) {
+  if (failedDefinitively(outcome.state)) {
     throw new W3ActionError(
       'TRANSFER_FAILED',
       `transfer failed: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,

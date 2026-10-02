@@ -5,7 +5,7 @@ author: 'w3-io'
 inputs:
   command:
     description: >-
-      Operation to perform. 72 commands across 17 categories:
+      Operation to perform. 73 commands across 17 categories:
       Vaults (list-vaults, create-vault, get-vault, get-vault-asset,
       list-vault-assets, submit-vault-proposal, archive-vault,
       restore-vault, rename-vault, create-vault-address,
@@ -13,7 +13,7 @@ inputs:
       Vault Groups (list-vault-groups),
       Transactions (list-transactions, get-transaction,
       create-transaction, create-transfer,
-      create-transaction-and-wait, transfer-out,
+      create-transaction-and-wait, transfer-out, call-contract,
       approve-transaction,
       abort-transaction, release-transaction,
       predict-transaction, push-transaction,
@@ -48,7 +48,14 @@ inputs:
     required: true
 
   private-key:
-    description: 'PEM-encoded P-256 private key for request signing (required for transactional operations)'
+    description: 'PEM-encoded P-256 private key for request signing (required for transactional operations unless signing-key-name is set)'
+    required: false
+
+  signing-key-name:
+    description: >-
+      Name of the W3 bridge secret holding the PEM-encoded P-256 key. When set,
+      requests are signed bridge-side and the key never enters the container;
+      takes the place of private-key
     required: false
 
   api-url:
@@ -102,12 +109,14 @@ inputs:
     description: 'JSON request body for create/update operations'
     required: false
 
-  # ── transfer-out (typed vault→external transfer) ─────────────────────
+  # ── transfer-out (typed vault→external transfer) and call-contract ───
   chain:
     description: 'ForDefi chain id, e.g. ethereum_mainnet or avalanche_chain'
     required: false
   to:
-    description: 'Destination address (0x-prefixed) for transfer-out'
+    description: >-
+      0x-prefixed address: the destination for transfer-out, the contract
+      called for call-contract
     required: false
   asset:
     description: >-
@@ -117,14 +126,25 @@ inputs:
   amount:
     description: 'transfer-out amount in base units (decimal integer; no unit conversion is applied)'
     required: false
+  calldata:
+    description: >-
+      call-contract calldata: 0x-prefixed hex of whole bytes, at least the
+      4-byte function selector
+    required: false
+  value:
+    description: >-
+      call-contract native coin sent with the call, in base units (decimal
+      integer)
+    required: false
+    default: '0'
   note:
-    description: 'Optional human-readable note attached to the transfer-out transaction'
+    description: 'Optional human-readable note attached to the transfer-out or call-contract transaction'
     required: false
   idempotence-id:
     description: >-
       Idempotency key (UUID) sent as the ForDefi x-idempotence-id header so a
-      repeated create-transaction / create-transfer / transfer-out moves money
-      at most once
+      repeated create-transaction / create-transfer / transfer-out /
+      call-contract moves money at most once. Required for call-contract
     required: false
 
   # ── Pagination ───────────────────────────────────────────────────────
@@ -171,13 +191,13 @@ outputs:
   result:
     description: 'JSON result of the operation'
   tx_hash:
-    description: 'transfer-out: on-chain transaction hash, or empty until mined (never the ForDefi UUID)'
+    description: 'transfer-out, call-contract: on-chain transaction hash, or empty where ForDefi has none yet (never the ForDefi UUID)'
   transaction_id:
-    description: 'transfer-out: ForDefi transaction UUID'
+    description: 'transfer-out, call-contract: ForDefi transaction UUID'
   state:
-    description: 'transfer-out: ForDefi transaction state, e.g. completed'
+    description: 'transfer-out, call-contract: ForDefi transaction state, e.g. completed'
   explorer_url:
-    description: 'transfer-out: block-explorer URL for the transaction'
+    description: 'transfer-out, call-contract: block-explorer URL for the transaction'
 
 runs:
   using: 'node24'

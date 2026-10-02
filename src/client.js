@@ -30,7 +30,13 @@ const TIMEOUT_MS = 30_000
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 1000
 
+/**
+ * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response
+ * and whether an earlier attempt ended without a verdict: a timeout or a 5xx
+ * may have been processed, where a 429 was not.
+ */
 async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
+  let unsettled = false
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
@@ -43,13 +49,15 @@ async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
         const delay = Number.isFinite(retrySeconds)
           ? retrySeconds * 1000
           : RETRY_DELAY_MS * 2 ** attempt
+        if (res.status >= 500) unsettled = true
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
-      return res
+      return { res, unsettled }
     } catch (e) {
       clearTimeout(timer)
       if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+        unsettled = true
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
         continue
       }
@@ -84,14 +92,17 @@ export class ForDefiClient {
   // ---------------------------------------------------------------------------
 
   async #apiCall(method, url, headers, body) {
-    const res = await fetchWithRetry(url, {
+    const { res, unsettled } = await fetchWithRetry(url, {
       method,
       headers,
       ...(body !== undefined ? { body } : {}),
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, { statusCode: res.status })
+      throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, {
+        statusCode: res.status,
+        details: { unsettled },
+      })
     }
     if (res.status === 204) return { success: true }
     const text = await res.text()

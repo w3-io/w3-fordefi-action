@@ -1,5 +1,5 @@
 /**
- * W3 ForDefi Action — 71 commands across 17 categories.
+ * W3 ForDefi Action — 73 commands across 17 categories.
  *
  * MPC-secured custody, multi-chain transactions, swaps, WaaS,
  * and organizational key management.
@@ -8,6 +8,7 @@
 import { createCommandRouter, setJsonOutput, bridge } from '@w3-io/action-core'
 import * as core from '@actions/core'
 import { ForDefiClient, setBridgeSigner } from './client.js'
+import { assertCallCreated, buildCallPayload, createFailure, parseIdempotenceId } from './call.js'
 import { assertNotFailed, buildTransferPayload, extractOutcome } from './transfer.js'
 
 // If a bridge is available, wire it up for P-256 signing
@@ -153,6 +154,34 @@ const router = createCommandRouter({
     // Fail only on a definitive non-settlement; an in-flight or on-chain tx
     // succeeds and the consumer confirms finality (and reversion) from the chain.
     assertNotFailed(outcome)
+  },
+  // One raw contract call out of a vault: the caller supplies the calldata,
+  // the idempotence key makes the create happen at most once, and the step
+  // returns on creation without waiting for approval, signing or mining.
+  'call-contract': async () => {
+    const idempotenceId = parseIdempotenceId(core.getInput('idempotence-id'))
+    const payload = buildCallPayload({
+      vaultId: req('vault-id'),
+      chain: req('chain'),
+      to: req('to'),
+      calldata: req('calldata'),
+      value: core.getInput('value') || undefined,
+      note: core.getInput('note') || undefined,
+    })
+    const result = await getClient()
+      .createTransaction(payload, { idempotenceId })
+      .catch((e) => {
+        throw createFailure(e)
+      })
+    const outcome = extractOutcome(result)
+    // Emit before asserting: a transaction ForDefi named is in the step's
+    // outputs whatever the step's own result.
+    core.setOutput('tx_hash', outcome.tx_hash)
+    core.setOutput('transaction_id', outcome.transaction_id)
+    core.setOutput('state', outcome.state)
+    core.setOutput('explorer_url', outcome.explorer_url)
+    setJsonOutput('result', result)
+    assertCallCreated(outcome)
   },
   'approve-transaction': async () =>
     setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),

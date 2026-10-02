@@ -28029,7 +28029,13 @@ const TIMEOUT_MS = 30_000
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 1000
 
+/**
+ * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response
+ * and whether an earlier attempt ended without a verdict: a timeout or a 5xx
+ * may have been processed, where a 429 was not.
+ */
 async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
+  let unsettled = false
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
@@ -28042,13 +28048,15 @@ async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
         const delay = Number.isFinite(retrySeconds)
           ? retrySeconds * 1000
           : RETRY_DELAY_MS * 2 ** attempt
+        if (res.status >= 500) unsettled = true
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
-      return res
+      return { res, unsettled }
     } catch (e) {
       clearTimeout(timer)
       if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
+        unsettled = true
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
         continue
       }
@@ -28083,14 +28091,17 @@ class ForDefiClient {
   // ---------------------------------------------------------------------------
 
   async #apiCall(method, url, headers, body) {
-    const res = await fetchWithRetry(url, {
+    const { res, unsettled } = await fetchWithRetry(url, {
       method,
       headers,
       ...(body !== undefined ? { body } : {}),
     })
     if (!res.ok) {
       const text = await res.text().catch(() => '')
-      throw new error_W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, { statusCode: res.status })
+      throw new error_W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, {
+        statusCode: res.status,
+        details: { unsettled },
+      })
     }
     if (res.status === 204) return { success: true }
     const text = await res.text()
@@ -28536,14 +28547,17 @@ function parseAddress(value, label) {
 }
 
 /** Parse a base-unit amount: non-negative integer, in-range for a uint256. */
-function parseBaseUnits(value) {
+function parseBaseUnits(value, label = 'amount') {
   const s = String(value ?? '').trim()
   if (!/^\d+$/.test(s)) {
-    throw new error_W3ActionError('INVALID_AMOUNT', 'amount must be a base-unit integer (decimal digits)')
+    throw new error_W3ActionError(
+      'INVALID_AMOUNT',
+      `${label} must be a base-unit integer (decimal digits)`,
+    )
   }
   const amt = BigInt(s)
   if (amt >= UINT256_LIMIT) {
-    throw new error_W3ActionError('INVALID_AMOUNT', 'amount exceeds uint256')
+    throw new error_W3ActionError('INVALID_AMOUNT', `${label} exceeds uint256`)
   }
   return amt
 }
@@ -28614,7 +28628,7 @@ function extractOutcome(result) {
   }
 }
 
-/** Definitive non-settlement states: ForDefi reports the transfer will not
+/** Definitive non-settlement states: ForDefi reports the transaction will not
  *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
  *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
  *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
@@ -28629,6 +28643,11 @@ const TERMINAL_FAILURE = new Set([
   'completed_reverted',
 ])
 
+/** Whether `state` is one ForDefi names as a definitive non-settlement. */
+function failedDefinitively(state) {
+  return TERMINAL_FAILURE.has(state)
+}
+
 /**
  * Fail the step only when the transfer definitively did not settle. Money
  * moving is confirmed downstream from the chain (the consumer re-reads the
@@ -28640,7 +28659,7 @@ const TERMINAL_FAILURE = new Set([
  * on a state ForDefi names as terminal-failed.
  */
 function assertNotFailed(outcome) {
-  if (TERMINAL_FAILURE.has(outcome.state)) {
+  if (failedDefinitively(outcome.state)) {
     throw new error_W3ActionError(
       'TRANSFER_FAILED',
       `transfer failed: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
@@ -28648,13 +28667,138 @@ function assertNotFailed(outcome) {
   }
 }
 
+;// CONCATENATED MODULE: ./src/call.js
+/**
+ * call-contract — one raw EVM contract call out of a vault, from primitives.
+ *
+ * The caller owns the calldata: this command neither encodes nor decodes it,
+ * so it carries any function of any contract. It builds the ForDefi payload
+ * around the bytes, creates the transaction, and returns. It does not wait:
+ * a transaction may sit in `waiting_for_approval` for as long as a human
+ * takes, and the consumer reads what became of it from ForDefi by the
+ * transaction id and from the chain by the receipt.
+ *
+ * The idempotence key is required. The client retries a create on a timeout
+ * or a 5xx, and only the key makes the retried request name the transaction
+ * the first one created.
+ */
+
+
+
+
+/** The canonical textual UUID, any version. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** Whole bytes, at least the four of a function selector. */
+const CALLDATA = /^0x(?:[0-9a-f]{2}){4,}$/
+
+/** Parse the idempotence key: ForDefi takes a UUID and nothing else. */
+function parseIdempotenceId(value) {
+  const s = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (!s) {
+    throw new error_W3ActionError('MISSING_INPUT', 'idempotence-id is required for call-contract')
+  }
+  if (!UUID.test(s)) {
+    throw new error_W3ActionError('INVALID_IDEMPOTENCE_ID', 'idempotence-id must be a UUID')
+  }
+  return s
+}
+
+/** Normalize calldata to lowercase hex, or fail loud. */
+function parseCalldata(value) {
+  const s = String(value ?? '')
+    .trim()
+    .toLowerCase()
+  if (!CALLDATA.test(s)) {
+    throw new error_W3ActionError(
+      'INVALID_CALLDATA',
+      'calldata must be 0x-prefixed hex of whole bytes, at least a 4-byte selector',
+    )
+  }
+  return s
+}
+
+/**
+ * Build the ForDefi create-transaction payload for a call from `vaultId` to
+ * the contract at `to`. `value` is the native coin sent with the call, in
+ * base units; a call that pays nothing sends "0".
+ */
+function buildCallPayload({ vaultId, chain, to, calldata, value, note }) {
+  if (!vaultId) throw new error_W3ActionError('MISSING_INPUT', 'vault-id is required')
+  if (!chain) throw new error_W3ActionError('MISSING_INPUT', 'chain is required')
+  return {
+    vault_id: vaultId,
+    signer_type: 'api_signer',
+    type: 'evm_transaction',
+    details: {
+      type: 'evm_raw_transaction',
+      chain,
+      to: parseAddress(to, 'to'),
+      value: parseBaseUnits(value ?? '0', 'value').toString(10),
+      data: { type: 'hex', hex_data: parseCalldata(calldata) },
+      gas: { type: 'priority', priority_level: 'medium' },
+    },
+    ...(note ? { note } : {}),
+  }
+}
+
+/**
+ * The error a failed create is reported by. A 4xx is ForDefi refusing the
+ * request, and the step reports it with its status so a consumer can read
+ * "nothing was created" from it. That reading holds only when the refusal
+ * answers the first request that could have been processed: after a timeout
+ * or a 5xx the retried request carries a key ForDefi may already hold a
+ * transaction under, and what it answers to a repeated key is not something
+ * a refusal can be told apart from. Such a refusal is reported with no
+ * status, as the unknown it is.
+ */
+function createFailure(err) {
+  const refused =
+    err instanceof error_W3ActionError &&
+    err.code === 'HTTP_ERROR' &&
+    err.statusCode >= 400 &&
+    err.statusCode < 500
+  if (refused && err.details?.unsettled) {
+    return new error_W3ActionError(
+      'AMBIGUOUS_CREATE',
+      `create was refused after an earlier attempt went unanswered, so a transaction may exist under the idempotence key: ${err.message}`,
+    )
+  }
+  return err
+}
+
+/**
+ * Fail the step on the two outcomes of a create that answered: a response
+ * that names no transaction, and a transaction already in a state ForDefi
+ * names as a definitive non-settlement. Every other state passes, the same
+ * boundary `assertNotFailed` draws for a transfer.
+ *
+ * A response with no id is a failure of a different kind than a refused
+ * request: the custodian answered 2xx, so a transaction may exist that this
+ * step cannot name.
+ */
+function assertCallCreated(outcome) {
+  if (!outcome.transaction_id) {
+    throw new error_W3ActionError('INVALID_RESPONSE', 'ForDefi created a transaction and returned no id')
+  }
+  if (failedDefinitively(outcome.state)) {
+    throw new error_W3ActionError(
+      'CALL_FAILED',
+      `contract call failed: state='${outcome.state}', transaction_id='${outcome.transaction_id}'`,
+    )
+  }
+}
+
 ;// CONCATENATED MODULE: ./src/index.js
 /**
- * W3 ForDefi Action — 71 commands across 17 categories.
+ * W3 ForDefi Action — 73 commands across 17 categories.
  *
  * MPC-secured custody, multi-chain transactions, swaps, WaaS,
  * and organizational key management.
  */
+
 
 
 
@@ -28804,6 +28948,34 @@ const router = createCommandRouter({
     // Fail only on a definitive non-settlement; an in-flight or on-chain tx
     // succeeds and the consumer confirms finality (and reversion) from the chain.
     assertNotFailed(outcome)
+  },
+  // One raw contract call out of a vault: the caller supplies the calldata,
+  // the idempotence key makes the create happen at most once, and the step
+  // returns on creation without waiting for approval, signing or mining.
+  'call-contract': async () => {
+    const idempotenceId = parseIdempotenceId(lib_core.getInput('idempotence-id'))
+    const payload = buildCallPayload({
+      vaultId: req('vault-id'),
+      chain: req('chain'),
+      to: req('to'),
+      calldata: req('calldata'),
+      value: lib_core.getInput('value') || undefined,
+      note: lib_core.getInput('note') || undefined,
+    })
+    const result = await getClient()
+      .createTransaction(payload, { idempotenceId })
+      .catch((e) => {
+        throw createFailure(e)
+      })
+    const outcome = extractOutcome(result)
+    // Emit before asserting: a transaction ForDefi named is in the step's
+    // outputs whatever the step's own result.
+    lib_core.setOutput('tx_hash', outcome.tx_hash)
+    lib_core.setOutput('transaction_id', outcome.transaction_id)
+    lib_core.setOutput('state', outcome.state)
+    lib_core.setOutput('explorer_url', outcome.explorer_url)
+    setJsonOutput('result', result)
+    assertCallCreated(outcome)
   },
   'approve-transaction': async () =>
     setJsonOutput('result', await getClient().approveTransaction(req('transaction-id'))),

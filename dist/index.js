@@ -28836,7 +28836,9 @@ function parseIdempotenceId(value) {
 
 /**
  * Parse the deadline to epoch milliseconds. Fractions past the millisecond
- * are dropped, which moves the deadline earlier and never later.
+ * are dropped, which moves the deadline earlier and never later. A date or
+ * time that does not exist (February 30, hour 24) is refused: `Date.parse`
+ * would roll it into a later instant.
  */
 function parseNotAfter(value) {
   const s = String(value ?? '').trim()
@@ -28844,7 +28846,8 @@ function parseNotAfter(value) {
     throw new error_W3ActionError('MISSING_INPUT', 'not-after is required for call-contract')
   }
   const ms = INSTANT.test(s) ? Date.parse(s.replace(/(\.\d{3})\d+Z$/, '$1Z')) : NaN
-  if (!Number.isFinite(ms)) {
+  const exists = Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 19) === s.slice(0, 19)
+  if (!exists) {
     throw new error_W3ActionError(
       'INVALID_NOT_AFTER',
       'not-after must be an RFC 3339 UTC instant, e.g. 2026-10-02T20:15:00.000Z',

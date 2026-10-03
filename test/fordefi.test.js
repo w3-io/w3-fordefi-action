@@ -10,13 +10,9 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
-import { ForDefiClient } from '../src/client.js'
-import {
-  assertNotFailed,
-  buildTransferPayload,
-  encodeErc20Transfer,
-  extractOutcome,
-} from '../src/transfer.js'
+import { ForDefiClient, isTimeout, retryAfterMs } from '../src/client.js'
+import { extractOutcome } from '../src/outcome.js'
+import { assertNotFailed, buildTransferPayload, encodeErc20Transfer } from '../src/transfer.js'
 import { W3ActionError } from '@w3-io/action-core'
 
 const VAULTS_RESPONSE = {
@@ -228,6 +224,13 @@ describe('transfer: assertNotFailed', () => {
     )
   })
 
+  it('throws on a response that names no transaction', () => {
+    assert.throws(
+      () => assertNotFailed({ state: 'completed', transaction_id: '', tx_hash: '' }),
+      (e) => e instanceof W3ActionError && e.code === 'INVALID_RESPONSE',
+    )
+  })
+
   it('throws on a definitive non-settlement', () => {
     for (const state of [
       'mined_reverted',
@@ -243,6 +246,190 @@ describe('transfer: assertNotFailed', () => {
         (e) => e instanceof W3ActionError && e.code === 'TRANSFER_FAILED',
       )
     }
+  })
+})
+
+describe('ForDefiClient: send deadline', () => {
+  const signer = () =>
+    generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+
+  it('sends nothing at or after the deadline', async () => {
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    for (const notAfter of [Date.now() - 1, Date.now()]) {
+      await assert.rejects(
+        () => client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter }),
+        (err) =>
+          err instanceof W3ActionError &&
+          err.code === 'DEADLINE_PASSED' &&
+          err.statusCode === undefined &&
+          err.details.unsettled === false,
+      )
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it('signs no request whose timestamp is not earlier than the deadline', async () => {
+    // The clock reads exactly the deadline when the request is signed. The
+    // refusal names the signed timestamp, and nothing is signed or sent.
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const notAfter = Date.now() + 60_000
+    const realNow = Date.now
+    Date.now = () => notAfter
+    try {
+      await assert.rejects(
+        () => client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter }),
+        (err) =>
+          err instanceof W3ActionError &&
+          err.code === 'DEADLINE_PASSED' &&
+          /signed timestamp/.test(err.message),
+      )
+    } finally {
+      Date.now = realNow
+    }
+    assert.equal(calls.length, 0)
+  })
+
+  it('sends every attempt under one signed timestamp earlier than the deadline', async () => {
+    // A retry reuses the request signed once, so ForDefi's signature window
+    // runs from a timestamp before the deadline on every attempt.
+    mockFetch([{ status: 503, body: {} }, { body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const notAfter = Date.now() + 60_000
+    const result = await client.createTransaction(
+      { vault_id: 'v' },
+      { idempotenceId: 'k', notAfter },
+    )
+    assert.equal(result.id, 'fd')
+    assert.equal(calls.length, 2)
+    const stamps = calls.map((c) => Number(c.options.headers['x-timestamp']))
+    assert.equal(stamps[0], stamps[1])
+    assert.ok(stamps[0] < notAfter)
+    assert.equal(calls[0].options.headers['x-signature'], calls[1].options.headers['x-signature'])
+  })
+
+  it('decides each attempt on the clock reading it was started under', async () => {
+    // The clock reads one millisecond before the deadline when the attempt is
+    // checked, and the deadline itself on every later reading. The attempt
+    // was allowed on the earlier reading, so no reading taken between that
+    // check and the send may say the deadline has passed.
+    const notAfter = Date.UTC(2026, 9, 3, 1, 0, 0)
+    const readings = [notAfter - 5_000, notAfter - 1]
+    const seen = []
+    const realNow = Date.now
+    Date.now = () => {
+      const t = readings.length ? readings.shift() : notAfter
+      seen.push(t)
+      return t
+    }
+    let readingsAtSend
+    global.fetch = async () => {
+      readingsAtSend = seen.length
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ id: 'fd' }),
+      }
+    }
+    try {
+      const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+      await client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter })
+    } finally {
+      Date.now = realNow
+    }
+    assert.ok(readingsAtSend > 0)
+    assert.ok(seen.slice(0, readingsAtSend).every((t) => t < notAfter))
+  })
+
+  it('sends before the deadline', async () => {
+    mockFetch([{ body: { id: 'fd' } }])
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+    const result = await client.createTransaction(
+      { vault_id: 'v' },
+      { idempotenceId: 'k', notAfter: Date.now() + 60_000 },
+    )
+    assert.equal(result.id, 'fd')
+    assert.equal(calls.length, 1)
+  })
+})
+
+describe('ForDefiClient: retryAfterMs', () => {
+  const now = Date.UTC(2026, 9, 3, 1, 0, 0)
+
+  it('reads delay-seconds', () => {
+    assert.equal(retryAfterMs('0', now), 0)
+    assert.equal(retryAfterMs('120', now), 120_000)
+  })
+
+  it('reads an HTTP-date as the time until it, never negative', () => {
+    assert.equal(retryAfterMs('Sat, 03 Oct 2026 01:02:00 GMT', now), 120_000)
+    assert.equal(retryAfterMs('Sat, 03 Oct 2026 00:59:00 GMT', now), 0)
+  })
+
+  it('reads anything else as no request', () => {
+    for (const v of [null, undefined, '', '1.5', '-1', '12abc', '2026-10-03T01:02:00Z', 'soon']) {
+      assert.equal(retryAfterMs(v, now), null)
+    }
+  })
+})
+
+describe('ForDefiClient: timeouts', () => {
+  const connectTimeout = () => {
+    const cause = Object.assign(new Error('Connect Timeout Error'), {
+      code: 'UND_ERR_CONNECT_TIMEOUT',
+    })
+    return new TypeError('fetch failed', { cause })
+  }
+
+  it('reads a timeout from the error or from its cause', () => {
+    assert.equal(isTimeout(connectTimeout()), true)
+    assert.equal(isTimeout({ code: 'UND_ERR_HEADERS_TIMEOUT' }), true)
+    assert.equal(isTimeout(Object.assign(new Error('x'), { name: 'AbortError' })), true)
+    assert.equal(
+      isTimeout(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })),
+      false,
+    )
+    assert.equal(isTimeout(undefined), false)
+  })
+
+  it('retries a keyed create after a connection timeout reported on the cause', async () => {
+    let n = 0
+    global.fetch = async () => {
+      n++
+      if (n === 1) throw connectTimeout()
+      return { ok: true, status: 200, headers: new Map(), text: async () => '{"id":"fd"}' }
+    }
+    const signer = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer })
+    const result = await client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k' })
+    assert.equal(result.id, 'fd')
+    assert.equal(n, 2)
+  })
+
+  it('reports an unkeyed create that timed out as TIMEOUT, without retrying', async () => {
+    let n = 0
+    global.fetch = async () => {
+      n++
+      throw connectTimeout()
+    }
+    const signer = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer })
+    await assert.rejects(
+      () => client.createTransaction({ vault_id: 'v' }),
+      (err) => err instanceof W3ActionError && err.code === 'TIMEOUT',
+    )
+    assert.equal(n, 1)
   })
 })
 

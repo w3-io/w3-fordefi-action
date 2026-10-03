@@ -30,35 +30,128 @@ const TIMEOUT_MS = 30_000
 const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 1000
 
-async function fetchWithRetry(url, opts, retries = MAX_RETRIES) {
+/**
+ * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response,
+ * its body, and whether an earlier attempt ended without a verdict: a timeout
+ * or a 5xx may have been processed, where a 429 was not. An attempt's timeout
+ * covers its whole exchange, the body as well as the headers, so a server
+ * that answers with headers and then stalls is cut off like one that never
+ * answers.
+ *
+ * `retryUnsettled: false` retries a 429 and nothing else. It is for a request
+ * that is not safe to repeat: a create sent without an idempotence key, where
+ * a second request after an unanswered first can create a second transaction.
+ *
+ * `notAfter` (epoch milliseconds) is a deadline on sending. No attempt
+ * begins at or after it; a wait that would end at or after it is not waited
+ * out; and an attempt still in flight when it arrives is abandoned there.
+ * Each of the three is reported as `DEADLINE_PASSED`. So this function sends
+ * nothing at or after the deadline, whatever a `Retry-After` header asks
+ * for. The clock is this process's.
+ */
+async function fetchWithRetry(
+  url,
+  opts,
+  { retries = MAX_RETRIES, retryUnsettled = true, notAfter } = {},
+) {
+  let unsettled = false
+  // Reads the clock once and returns that reading, so a caller that goes on
+  // to act acts on the same instant the check passed at.
+  const refuseAtDeadline = (wait = 0) => {
+    const now = Date.now()
+    if (notAfter === undefined || now + wait < notAfter) return now
+    throw new W3ActionError(
+      'DEADLINE_PASSED',
+      `not sent: the deadline ${new Date(notAfter).toISOString()} ${wait ? 'would pass before the next attempt' : 'has passed'}` +
+        (unsettled
+          ? '; an earlier attempt went unanswered, so a transaction may exist under the idempotence key'
+          : ''),
+      { details: { unsettled } },
+    )
+  }
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // One reading decides whether the attempt may begin and how long it may
+    // run, and nothing between it and `fetch` yields, so an attempt that
+    // begins has a positive budget left before the deadline.
+    const now = refuseAtDeadline()
+    const budget = notAfter === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, notAfter - now)
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), budget)
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })
-      clearTimeout(timer)
-      if ((res.status === 429 || res.status >= 500) && attempt < retries) {
-        const retryAfter = res.headers.get('retry-after')
-        const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
-        const delay = Number.isFinite(retrySeconds)
-          ? retrySeconds * 1000
-          : RETRY_DELAY_MS * 2 ** attempt
+      const retryable = res.status === 429 || (res.status >= 500 && retryUnsettled)
+      if (retryable && attempt < retries) {
+        clearTimeout(timer)
+        await res.body?.cancel().catch(() => {})
+        const delay = retryAfterMs(res.headers.get('retry-after')) ?? RETRY_DELAY_MS * 2 ** attempt
+        if (res.status >= 500) unsettled = true
+        refuseAtDeadline(delay)
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
-      return res
+      // An error body is read for its message only, so a failure to read it is
+      // tolerated; an abort is not, because it is the timer cutting the
+      // exchange short.
+      const text = res.ok
+        ? await res.text()
+        : await res.text().catch((e) => {
+            if (e.name === 'AbortError') throw e
+            return ''
+          })
+      clearTimeout(timer)
+      return { res, text, unsettled }
     } catch (e) {
       clearTimeout(timer)
-      if (attempt < retries && (e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT')) {
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * 2 ** attempt))
-        continue
+      const timedOut = isTimeout(e)
+      if (timedOut) {
+        unsettled = true
+        if (retryUnsettled && attempt < retries) {
+          const delay = RETRY_DELAY_MS * 2 ** attempt
+          refuseAtDeadline(delay)
+          await new Promise((r) => setTimeout(r, delay))
+          continue
+        }
+        // An attempt the deadline cut short reports the deadline.
+        refuseAtDeadline()
       }
-      if (e.name === 'AbortError') {
-        throw new W3ActionError('TIMEOUT', `Request timed out after ${TIMEOUT_MS}ms: ${url}`)
+      if (timedOut) {
+        throw new W3ActionError('TIMEOUT', `Request timed out after ${budget}ms: ${url}`)
       }
       throw e
     }
   }
+}
+
+/** Undici's timeout codes. `fetch` reports them on the error's `cause`. */
+const UNDICI_TIMEOUTS = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+])
+
+/**
+ * Whether a failed attempt timed out: aborted by its own timer, or timed out
+ * inside undici, which `fetch` reports as a `TypeError` whose `cause` carries
+ * the code.
+ */
+export function isTimeout(e) {
+  return (
+    e?.name === 'AbortError' || UNDICI_TIMEOUTS.has(e?.code) || UNDICI_TIMEOUTS.has(e?.cause?.code)
+  )
+}
+
+/**
+ * The wait a `Retry-After` header asks for, in milliseconds, or `null` when
+ * the header is absent or in neither of its two forms (RFC 9110 §10.2.3):
+ * whole delay-seconds, or an HTTP-date, read as the time until that date and
+ * never less than zero.
+ */
+export function retryAfterMs(value, now = Date.now()) {
+  const s = String(value ?? '').trim()
+  if (/^\d+$/.test(s)) return Number(s) * 1000
+  if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(s)) return null
+  const at = Date.parse(s)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
 }
 
 export class ForDefiClient {
@@ -83,25 +176,25 @@ export class ForDefiClient {
   // Transport
   // ---------------------------------------------------------------------------
 
-  async #apiCall(method, url, headers, body) {
-    const res = await fetchWithRetry(url, {
-      method,
-      headers,
-      ...(body !== undefined ? { body } : {}),
-    })
+  async #apiCall(method, url, headers, body, retry) {
+    const { res, text, unsettled } = await fetchWithRetry(
+      url,
+      { method, headers, ...(body !== undefined ? { body } : {}) },
+      retry,
+    )
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
-      throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, { statusCode: res.status })
+      throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, {
+        statusCode: res.status,
+        details: { unsettled },
+      })
     }
-    if (res.status === 204) return { success: true }
-    const text = await res.text()
-    if (!text) return { success: true }
+    if (res.status === 204 || !text) return { success: true }
     try {
       return JSON.parse(text)
     } catch (_e) {
       throw new W3ActionError(
         'INVALID_RESPONSE',
-        `ForDefi returned unparseable response: ${text.slice(0, 200)}`,
+        `ForDefi answered with success but its body is not JSON, so what the request did is unknown: ${text.slice(0, 200)}`,
       )
     }
   }
@@ -114,7 +207,7 @@ export class ForDefiClient {
     return this.#apiCall('GET', this.#buildUrl(path, query), this.#baseHeaders())
   }
 
-  async post(path, payload, { sign = false, idempotenceId } = {}) {
+  async post(path, payload, { sign = false, idempotenceId, retryUnsettled = true, notAfter } = {}) {
     const jsonBody = payload ? JSON.stringify(payload) : undefined
     const headers = { ...this.#baseHeaders(), 'Content-Type': 'application/json' }
     // ForDefi dedups transaction creation on the x-idempotence-id header (a
@@ -125,12 +218,28 @@ export class ForDefiClient {
 
     if (sign) {
       this.#requireSigner()
-      const timestamp = Date.now().toString()
+      const signedAt = Date.now()
+      // The signed timestamp is the one ForDefi's signature window is measured
+      // from, on ForDefi's clock, and every attempt below reuses it. Refusing
+      // here unless it is strictly earlier than the deadline bounds what
+      // ForDefi can accept for this request to before the deadline plus that
+      // window, whatever this process's clock says.
+      if (notAfter !== undefined && signedAt >= notAfter) {
+        throw new W3ActionError(
+          'DEADLINE_PASSED',
+          `not sent: the signed timestamp ${new Date(signedAt).toISOString()} is not earlier than the deadline ${new Date(notAfter).toISOString()}`,
+          { details: { unsettled: false } },
+        )
+      }
+      const timestamp = signedAt.toString()
       headers['x-signature'] = await this.#sign(path, timestamp, jsonBody || '')
       headers['x-timestamp'] = timestamp
     }
 
-    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody)
+    return this.#apiCall('POST', this.#buildUrl(path), headers, jsonBody, {
+      retryUnsettled,
+      notAfter,
+    })
   }
 
   async put(path, payload, { sign = false } = {}) {
@@ -264,14 +373,26 @@ export class ForDefiClient {
   getTransaction(id) {
     return this.get(`/api/v1/transactions/${id}`)
   }
+  // The three creates that take an idempotence key. With the key, a repeated
+  // request names the transaction the first one made, so an unanswered
+  // attempt is retried. Without it nothing ties the two requests together,
+  // and the create is sent at most once past a 429.
   createTransaction(p, opts) {
-    return this.post('/api/v1/transactions', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions', p, opts)
   }
   createTransfer(p, opts) {
-    return this.post('/api/v1/transactions/transfer', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions/transfer', p, opts)
   }
   createTransactionAndWait(p, opts) {
-    return this.post('/api/v1/transactions/create-and-wait', p, { sign: true, ...opts })
+    return this.#create('/api/v1/transactions/create-and-wait', p, opts)
+  }
+  #create(path, p, { idempotenceId, notAfter } = {}) {
+    return this.post(path, p, {
+      sign: true,
+      idempotenceId,
+      notAfter,
+      retryUnsettled: Boolean(idempotenceId),
+    })
   }
   approveTransaction(id) {
     return this.post(`/api/v1/transactions/${id}/approve`, {}, { sign: true })

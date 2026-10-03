@@ -41,7 +41,7 @@ commands:
   - name: create-vault
     description: >
       Create a new MPC vault. Vault creation is a signed operation —
-      requires the PEM private key to be configured.
+      requires a request-signing key (private-key or signing-key-name) to be configured.
     inputs:
       data:
         type: string
@@ -79,7 +79,7 @@ commands:
   - name: create-vault-address
     description: >
       Create a new blockchain address in a vault. Signed operation —
-      requires the PEM private key. Use to add new chain receive
+      requires a request-signing key (private-key or signing-key-name). Use to add new chain receive
       addresses to an existing vault.
     inputs:
       vault-id:
@@ -100,7 +100,7 @@ commands:
   - name: create-transaction
     description: >
       Create a multi-chain transaction in a ForDefi vault. Signed
-      operation — requires the PEM private key. Transaction enters
+      operation — requires a request-signing key (private-key or signing-key-name). Transaction enters
       policy review before being broadcast. Pair with get-transaction
       to poll for completion.
     inputs:
@@ -120,7 +120,7 @@ commands:
   - name: create-transfer
     description: >
       Simplified transfer shortcut for moving assets between addresses.
-      Signed operation — requires the PEM private key. Convenience
+      Signed operation — requires a request-signing key (private-key or signing-key-name). Convenience
       wrapper over create-transaction for the common transfer case.
     inputs:
       data:
@@ -190,6 +190,66 @@ commands:
         type: object
         description: 'Raw ForDefi transaction {id, hash, state, explorer_url, ...}'
 
+  - name: call-contract
+    description: >
+      One raw EVM transaction out of a vault. Takes the target, the calldata
+      and the native value, builds the ForDefi payload, and creates the
+      transaction under a required idempotence key and a required deadline:
+      no create request is sent at or after not-after. With no calldata it
+      is a plain transfer of the chain coin. Returns on creation: it does
+      not wait for approval, signing or mining, so read what became of the
+      transaction by its id. ForDefi simulates at create, and a call that
+      would revert is refused with no transaction.
+    inputs:
+      vault-id:
+        type: string
+        required: true
+        description: Source ForDefi vault ID
+      chain:
+        type: string
+        required: true
+        description: 'ForDefi chain id (e.g. ethereum_mainnet, avalanche_chain)'
+      to:
+        type: string
+        required: true
+        description: Contract called (0x-prefixed)
+      calldata:
+        type: string
+        required: false
+        description: '0x-prefixed hex of whole bytes, at least the 4-byte function selector; empty for a plain transfer, which needs a positive value'
+      not-after:
+        type: string
+        required: true
+        description: 'Deadline as an RFC 3339 UTC instant (e.g. 2026-10-02T20:15:00.000Z); every create request is signed with a timestamp strictly earlier than it, and none is sent at or after it'
+      value:
+        type: string
+        required: false
+        description: 'Native coin sent with the call, in base units (decimal integer); default 0'
+      idempotence-id:
+        type: string
+        required: true
+        description: 'UUID set as the ForDefi x-idempotence-id header; a repeat creates at most one transaction'
+      note:
+        type: string
+        required: false
+        description: Optional human-readable note on the transaction
+    outputs:
+      tx_hash:
+        type: string
+        description: On-chain transaction hash, or empty where ForDefi has none yet (never the ForDefi UUID)
+      transaction_id:
+        type: string
+        description: ForDefi transaction UUID
+      state:
+        type: string
+        description: 'ForDefi transaction state at creation, e.g. waiting_for_approval'
+      explorer_url:
+        type: string
+        description: Block-explorer URL for the transaction
+      result:
+        type: object
+        description: 'Raw ForDefi transaction {id, hash, state, explorer_url, ...}'
+
   - name: predict-transaction
     description: >
       Simulate a transaction before submitting — returns fee estimate,
@@ -209,7 +269,7 @@ commands:
   - name: approve-transaction
     description: >
       Approve a pending transaction awaiting policy review. Signed
-      operation — requires the PEM private key. Use after a
+      operation — requires a request-signing key (private-key or signing-key-name). Use after a
       create-transaction call returns a pending state.
     inputs:
       transaction-id:
@@ -224,7 +284,7 @@ commands:
   - name: abort-transaction
     description: >
       Abort a pending transaction before it broadcasts. Signed
-      operation — requires the PEM private key. Irreversible once the
+      operation — requires a request-signing key (private-key or signing-key-name). Irreversible once the
       transaction has moved past the abortable state.
     inputs:
       transaction-id:
@@ -287,7 +347,7 @@ commands:
   - name: create-swap
     description: >
       Execute a token swap on the chosen provider. Signed operation —
-      requires the PEM private key. Pair with get-swap-quotes to pick
+      requires a request-signing key (private-key or signing-key-name). Pair with get-swap-quotes to pick
       a route first.
     inputs:
       data:
@@ -399,6 +459,24 @@ display:
         - { label: 'To', value: '{{ inputs.to | truncate_addr }}' }
         - { label: 'Asset', value: "{{ inputs.asset | default: 'native' }}" }
         - { label: 'Amount', value: '{{ inputs.amount }}' }
+        - { label: 'Signer', value: 'ForDefi MPC' }
+        - { label: 'State', value: '{{ outputs.state }}' }
+      chain_path: 'inputs.chain'
+      destination_brand_path: 'inputs.to'
+      tx_hash_path: 'outputs.tx_hash'
+      chain_explorer:
+        ethereum_mainnet: 'https://etherscan.io/tx/{{tx_hash}}'
+        avalanche_chain: 'https://snowtrace.io/tx/{{tx_hash}}'
+        base_mainnet: 'https://basescan.org/tx/{{tx_hash}}'
+        ethereum_sepolia: 'https://sepolia.etherscan.io/tx/{{tx_hash}}'
+
+    call-contract:
+      icon: 'send'
+      title_template: "{{ inputs.note | default: 'Contract call' }}"
+      subtitle_template: 'to {{ inputs.to | truncate_addr }}'
+      summary:
+        - { label: 'Contract', value: '{{ inputs.to | truncate_addr }}' }
+        - { label: 'Action', value: '{{ inputs.calldata | decode_calldata_action }}' }
         - { label: 'Signer', value: 'ForDefi MPC' }
         - { label: 'State', value: '{{ outputs.state }}' }
       chain_path: 'inputs.chain'

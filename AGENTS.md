@@ -76,8 +76,12 @@ const tx = await bridge.chain(
 const hash = await bridge.crypto('keccak256', { data: '0xdeadbeef' })
 ```
 
-**Why:** The bridge runs on the host. It handles signing via `W3_SECRET_*`
-keys that never enter the container. Bundling ethers adds 300KB+ to your
+**Why:** The bridge runs on the host. It signs with keys held in its own
+secrets map, which never enter the container. A bridge started on its own
+loads them from `W3_SECRET_*` environment variables and strips the prefix; a
+workflow step supplies one by referencing the namespace secret in its `env`.
+Either way the key is looked up by its bare name (`FORDEFI_SIGNING_KEY`, not
+`W3_SECRET_FORDEFI_SIGNING_KEY`). Bundling ethers adds 300KB+ to your
 action and requires private keys as inputs — a security risk.
 
 **Available bridge operations:**
@@ -85,7 +89,7 @@ action and requires private keys as inputs — a security risk.
 - Ethereum: read-contract, call-contract, send-transaction, get-balance, transfer, approve-token, transfer-token, get-token-balance, get-events, deploy-contract, and more
 - Bitcoin: get-balance, send, get-utxos, get-fee-rate
 - Solana: get-balance, transfer, call-program, get-token-balance
-- Crypto: keccak256, aes-encrypt/decrypt, ed25519-sign/verify, hkdf, jwt-sign/verify, totp
+- Crypto: keccak256, aes-encrypt/decrypt, ed25519-sign/verify, p256-sign, hkdf, jwt-sign/verify, totp
 
 **Bridge param names** (these must be exact):
 

@@ -18,7 +18,11 @@ ForDefi (acquired by Paxos, Nov 2025) provides institutional-grade MPC custody a
 ForDefi uses two-layer auth:
 
 1. **Access token** (all requests) — JWT from API User creation in the ForDefi web console. Required for every command.
-2. **Private key** (transactional operations) — PEM-encoded P-256 key for ECDSA request signing. Required for creating transactions, contacts, vaults, etc.
+2. **Request-signing key** (transactional operations) — a PEM-encoded P-256 key for ECDSA request signing, required for creating transactions, contacts, vaults, etc. Supply it one of two ways:
+   - `private-key`: the PEM itself. The key enters the action's container.
+   - `signing-key-name`: the name of a W3 bridge secret holding the PEM. Requests are signed by the W3 bridge and the key never enters the container. Reference the secret in the step's `env` so the bridge receives it, and pass its name as a bare literal, the name the bridge holds it under with no `W3_SECRET_` prefix (see the second example).
+
+Every command that needs a signing key accepts either input.
 
 ```yaml
 - uses: w3-io/w3-fordefi-action@v0
@@ -34,27 +38,40 @@ ForDefi uses two-layer auth:
       }
 ```
 
-## Commands (71)
+With the key held as a W3 bridge secret named `FORDEFI_SIGNING_KEY`:
 
-| Category                   | Commands                                                                                                                                                                                                                                                                                    |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Vaults** (13)            | `list-vaults`, `create-vault`, `get-vault`, `get-vault-asset`, `list-vault-assets`, `submit-vault-proposal`, `archive-vault`, `restore-vault`, `rename-vault`, `create-vault-address`, `list-vault-addresses`, `rename-vault-address`, `export-vaults`                                      |
-| **Transactions** (13)      | `list-transactions`, `get-transaction`, `create-transaction`, `create-transfer`, `create-transaction-and-wait`, `approve-transaction`, `abort-transaction`, `release-transaction`, `predict-transaction`, `push-transaction`, `update-spam-state`, `trigger-signing`, `export-transactions` |
-| **Batch Transactions** (4) | `create-batch-transaction`, `predict-batch-transaction`, `abort-batch-transaction`, `approve-batch-transaction`                                                                                                                                                                             |
-| **Swaps** (4)              | `get-swap-providers`, `get-swap-quotes`, `create-swap`, `predict-swap`                                                                                                                                                                                                                      |
-| **Assets** (5)             | `get-owned-asset`, `list-owned-assets`, `update-asset-config`, `fetch-asset-prices`, `create-asset-info`                                                                                                                                                                                    |
-| **Blockchains** (2)        | `list-blockchains`, `get-suggested-fees`                                                                                                                                                                                                                                                    |
-| **Address Book** (5)       | `create-contact`, `list-contacts`, `create-batch-contacts`, `abort-contact-proposal`, `edit-contact`                                                                                                                                                                                        |
-| **Users** (2)              | `list-users`, `get-user`                                                                                                                                                                                                                                                                    |
-| **User Groups** (2)        | `list-user-groups`, `get-user-group`                                                                                                                                                                                                                                                        |
-| **End Users / WaaS** (6)   | `list-end-users`, `create-end-user`, `get-current-end-user`, `get-end-user`, `delete-end-user`, `set-export-key-permissions`                                                                                                                                                                |
-| **Auth Tokens** (3)        | `issue-auth-token`, `list-auth-tokens`, `delete-auth-token`                                                                                                                                                                                                                                 |
-| **Organizations** (4)      | `import-keys`, `abort-import-keys`, `get-import-keys-status`, `list-org-keys`                                                                                                                                                                                                               |
-| **Vault Groups** (1)       | `list-vault-groups`                                                                                                                                                                                                                                                                         |
-| **Webhooks** (2)           | `test-webhook`, `trigger-transaction-webhook`                                                                                                                                                                                                                                               |
-| **Audit Log** (2)          | `list-audit-log`, `export-audit-log`                                                                                                                                                                                                                                                        |
-| **Exports** (2)            | `get-export`, `abort-export`                                                                                                                                                                                                                                                                |
-| **Enclave Keys** (1)       | `list-enclave-keys`                                                                                                                                                                                                                                                                         |
+```yaml
+- uses: w3-io/w3-fordefi-action@v0
+  env:
+    FORDEFI_SIGNING_KEY: ${{ secrets.FORDEFI_SIGNING_KEY }}
+  with:
+    command: create-transaction
+    access-token: ${{ secrets.FORDEFI_ACCESS_TOKEN }}
+    signing-key-name: FORDEFI_SIGNING_KEY
+    data: '{ "vault_id": "...", "type": "evm_transaction", "details": { ... } }'
+```
+
+## Commands (73)
+
+| Category                   | Commands                                                                                                                                                                                                                                                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Vaults** (13)            | `list-vaults`, `create-vault`, `get-vault`, `get-vault-asset`, `list-vault-assets`, `submit-vault-proposal`, `archive-vault`, `restore-vault`, `rename-vault`, `create-vault-address`, `list-vault-addresses`, `rename-vault-address`, `export-vaults`                                                                       |
+| **Transactions** (15)      | `list-transactions`, `get-transaction`, `create-transaction`, `create-transfer`, `create-transaction-and-wait`, `transfer-out`, `call-contract`, `approve-transaction`, `abort-transaction`, `release-transaction`, `predict-transaction`, `push-transaction`, `update-spam-state`, `trigger-signing`, `export-transactions` |
+| **Batch Transactions** (4) | `create-batch-transaction`, `predict-batch-transaction`, `abort-batch-transaction`, `approve-batch-transaction`                                                                                                                                                                                                              |
+| **Swaps** (4)              | `get-swap-providers`, `get-swap-quotes`, `create-swap`, `predict-swap`                                                                                                                                                                                                                                                       |
+| **Assets** (5)             | `get-owned-asset`, `list-owned-assets`, `update-asset-config`, `fetch-asset-prices`, `create-asset-info`                                                                                                                                                                                                                     |
+| **Blockchains** (2)        | `list-blockchains`, `get-suggested-fees`                                                                                                                                                                                                                                                                                     |
+| **Address Book** (5)       | `create-contact`, `list-contacts`, `create-batch-contacts`, `abort-contact-proposal`, `edit-contact`                                                                                                                                                                                                                         |
+| **Users** (2)              | `list-users`, `get-user`                                                                                                                                                                                                                                                                                                     |
+| **User Groups** (2)        | `list-user-groups`, `get-user-group`                                                                                                                                                                                                                                                                                         |
+| **End Users / WaaS** (6)   | `list-end-users`, `create-end-user`, `get-current-end-user`, `get-end-user`, `delete-end-user`, `set-export-key-permissions`                                                                                                                                                                                                 |
+| **Auth Tokens** (3)        | `issue-auth-token`, `list-auth-tokens`, `delete-auth-token`                                                                                                                                                                                                                                                                  |
+| **Organizations** (4)      | `import-keys`, `abort-import-keys`, `get-import-keys-status`, `list-org-keys`                                                                                                                                                                                                                                                |
+| **Vault Groups** (1)       | `list-vault-groups`                                                                                                                                                                                                                                                                                                          |
+| **Webhooks** (2)           | `test-webhook`, `trigger-transaction-webhook`                                                                                                                                                                                                                                                                                |
+| **Audit Log** (2)          | `list-audit-log`, `export-audit-log`                                                                                                                                                                                                                                                                                         |
+| **Exports** (2)            | `get-export`, `abort-export`                                                                                                                                                                                                                                                                                                 |
+| **Enclave Keys** (1)       | `list-enclave-keys`                                                                                                                                                                                                                                                                                                          |
 
 ## Environments
 

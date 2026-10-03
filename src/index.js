@@ -161,7 +161,8 @@ const router = createCommandRouter({
   },
   // One raw transaction out of a vault: the caller supplies the calldata (or
   // none, for a plain transfer), the idempotence key makes the create happen
-  // at most once, no create is sent at or after the deadline, and the step
+  // at most once, every create is signed before the deadline and none is sent
+  // at or after it, and the step
   // returns on creation without waiting for approval, signing or mining.
   'call-contract': async () => {
     const idempotenceId = parseIdempotenceId(core.getInput('idempotence-id'))

@@ -15,7 +15,8 @@
  * The deadline is required. A step can run long after it was triggered, and
  * more than one run can carry one key, so a consumer that finds no
  * transaction under the key learns nothing unless it also knows no create can
- * still be sent. `not-after` is that bound: no create leaves at or after it.
+ * still be sent. `not-after` is that bound: every create is signed with a
+ * timestamp before it, and none leaves at or after it.
  */
 
 import { W3ActionError } from '@w3-io/action-core'

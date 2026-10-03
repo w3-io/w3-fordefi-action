@@ -14,12 +14,9 @@
 import { W3ActionError } from '@w3-io/action-core'
 
 /**
- * Extract the honest, named outcome from a ForDefi transaction response.
- *
- * `tx_hash` is the ON-CHAIN hash (`hash`), empty when ForDefi has not surfaced
- * one — NEVER the ForDefi UUID (`id`) standing in for it. Conflating the two is
- * exactly the bug the named outputs exist to avoid: a UUID is not a
- * transaction hash, and a block explorer link built from it is a lie.
+ * The named outputs of a ForDefi transaction response. `tx_hash` is the
+ * on-chain hash (`hash`), empty while ForDefi has none; it is never the
+ * ForDefi id (`id`), which names no on-chain transaction.
  */
 export function extractOutcome(result) {
   const r = result && typeof result === 'object' ? result : {}
@@ -32,11 +29,11 @@ export function extractOutcome(result) {
   }
 }
 
-/** Definitive non-settlement states: ForDefi reports the transaction will not
- *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
- *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
- *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
- *  chain, so an unrecognized or in-flight state is NOT a failure here. */
+/** The states ForDefi names as failed, on which a step fails while still
+ *  naming the transaction. They are ForDefi's verdict, not settlement: a
+ *  transaction that was signed before it reached one can still be broadcast,
+ *  so the consumer decides settlement from the chain. Every other state,
+ *  including one this set does not know, passes. */
 const TERMINAL_FAILURE = new Set([
   'aborted',
   'error_pushing_to_blockchain',

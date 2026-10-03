@@ -28593,12 +28593,9 @@ class ForDefiClient {
 
 
 /**
- * Extract the honest, named outcome from a ForDefi transaction response.
- *
- * `tx_hash` is the ON-CHAIN hash (`hash`), empty when ForDefi has not surfaced
- * one — NEVER the ForDefi UUID (`id`) standing in for it. Conflating the two is
- * exactly the bug the named outputs exist to avoid: a UUID is not a
- * transaction hash, and a block explorer link built from it is a lie.
+ * The named outputs of a ForDefi transaction response. `tx_hash` is the
+ * on-chain hash (`hash`), empty while ForDefi has none; it is never the
+ * ForDefi id (`id`), which names no on-chain transaction.
  */
 function extractOutcome(result) {
   const r = result && typeof result === 'object' ? result : {}
@@ -28611,11 +28608,11 @@ function extractOutcome(result) {
   }
 }
 
-/** Definitive non-settlement states: ForDefi reports the transaction will not
- *  settle — it failed to sign or broadcast, was dropped/cancelled, or reverted
- *  on-chain. Every other state is in-flight (`pushed_to_blockchain`, `stuck`, …)
- *  or on-chain (`mined`, `completed`); the consumer confirms settlement from the
- *  chain, so an unrecognized or in-flight state is NOT a failure here. */
+/** The states ForDefi names as failed, on which a step fails while still
+ *  naming the transaction. They are ForDefi's verdict, not settlement: a
+ *  transaction that was signed before it reached one can still be broadcast,
+ *  so the consumer decides settlement from the chain. Every other state,
+ *  including one this set does not know, passes. */
 const TERMINAL_FAILURE = new Set([
   'aborted',
   'error_pushing_to_blockchain',
@@ -28806,7 +28803,8 @@ function assertNotFailed(outcome) {
  * The deadline is required. A step can run long after it was triggered, and
  * more than one run can carry one key, so a consumer that finds no
  * transaction under the key learns nothing unless it also knows no create can
- * still be sent. `not-after` is that bound: no create leaves at or after it.
+ * still be sent. `not-after` is that bound: every create is signed with a
+ * timestamp before it, and none leaves at or after it.
  */
 
 
@@ -29080,7 +29078,8 @@ const router = createCommandRouter({
   },
   // One raw transaction out of a vault: the caller supplies the calldata (or
   // none, for a plain transfer), the idempotence key makes the create happen
-  // at most once, no create is sent at or after the deadline, and the step
+  // at most once, every create is signed before the deadline and none is sent
+  // at or after it, and the step
   // returns on creation without waiting for approval, signing or mining.
   'call-contract': async () => {
     const idempotenceId = parseIdempotenceId(lib_core.getInput('idempotence-id'))

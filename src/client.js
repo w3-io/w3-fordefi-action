@@ -55,8 +55,11 @@ async function fetchWithRetry(
   { retries = MAX_RETRIES, retryUnsettled = true, notAfter } = {},
 ) {
   let unsettled = false
+  // Reads the clock once and returns that reading, so a caller that goes on
+  // to act acts on the same instant the check passed at.
   const refuseAtDeadline = (wait = 0) => {
-    if (notAfter === undefined || Date.now() + wait < notAfter) return
+    const now = Date.now()
+    if (notAfter === undefined || now + wait < notAfter) return now
     throw new W3ActionError(
       'DEADLINE_PASSED',
       `not sent: the deadline ${new Date(notAfter).toISOString()} ${wait ? 'would pass before the next attempt' : 'has passed'}` +
@@ -67,9 +70,12 @@ async function fetchWithRetry(
     )
   }
   for (let attempt = 0; attempt <= retries; attempt++) {
-    refuseAtDeadline()
+    // One reading decides whether the attempt may begin and how long it may
+    // run, and nothing between it and `fetch` yields, so an attempt that
+    // begins has a positive budget left before the deadline.
+    const now = refuseAtDeadline()
+    const budget = notAfter === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, notAfter - now)
     const controller = new AbortController()
-    const budget = notAfter === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, notAfter - Date.now())
     const timer = setTimeout(() => controller.abort(), budget)
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })

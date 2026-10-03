@@ -312,6 +312,40 @@ describe('ForDefiClient: send deadline', () => {
     assert.equal(calls[0].options.headers['x-signature'], calls[1].options.headers['x-signature'])
   })
 
+  it('decides each attempt on the clock reading it was started under', async () => {
+    // The clock reads one millisecond before the deadline when the attempt is
+    // checked, and the deadline itself on every later reading. The attempt
+    // was allowed on the earlier reading, so no reading taken between that
+    // check and the send may say the deadline has passed.
+    const notAfter = Date.UTC(2026, 9, 3, 1, 0, 0)
+    const readings = [notAfter - 5_000, notAfter - 1]
+    const seen = []
+    const realNow = Date.now
+    Date.now = () => {
+      const t = readings.length ? readings.shift() : notAfter
+      seen.push(t)
+      return t
+    }
+    let readingsAtSend
+    global.fetch = async () => {
+      readingsAtSend = seen.length
+      return {
+        ok: true,
+        status: 200,
+        headers: new Map(),
+        text: async () => JSON.stringify({ id: 'fd' }),
+      }
+    }
+    try {
+      const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })
+      await client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k', notAfter })
+    } finally {
+      Date.now = realNow
+    }
+    assert.ok(readingsAtSend > 0)
+    assert.ok(seen.slice(0, readingsAtSend).every((t) => t < notAfter))
+  })
+
   it('sends before the deadline', async () => {
     mockFetch([{ body: { id: 'fd' } }])
     const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer() })

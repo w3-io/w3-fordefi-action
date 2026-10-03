@@ -10,7 +10,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
-import { ForDefiClient } from '../src/client.js'
+import { ForDefiClient, retryAfterMs } from '../src/client.js'
 import { extractOutcome } from '../src/outcome.js'
 import { assertNotFailed, buildTransferPayload, encodeErc20Transfer } from '../src/transfer.js'
 import { W3ActionError } from '@w3-io/action-core'
@@ -321,6 +321,26 @@ describe('ForDefiClient: send deadline', () => {
     )
     assert.equal(result.id, 'fd')
     assert.equal(calls.length, 1)
+  })
+})
+
+describe('ForDefiClient: retryAfterMs', () => {
+  const now = Date.UTC(2026, 9, 3, 1, 0, 0)
+
+  it('reads delay-seconds', () => {
+    assert.equal(retryAfterMs('0', now), 0)
+    assert.equal(retryAfterMs('120', now), 120_000)
+  })
+
+  it('reads an HTTP-date as the time until it, never negative', () => {
+    assert.equal(retryAfterMs('Sat, 03 Oct 2026 01:02:00 GMT', now), 120_000)
+    assert.equal(retryAfterMs('Sat, 03 Oct 2026 00:59:00 GMT', now), 0)
+  })
+
+  it('reads anything else as no request', () => {
+    for (const v of [null, undefined, '', '1.5', '-1', '12abc', '2026-10-03T01:02:00Z', 'soon']) {
+      assert.equal(retryAfterMs(v, now), null)
+    }
   })
 })
 

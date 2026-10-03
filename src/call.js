@@ -124,7 +124,7 @@ export function assertCallCreated(outcome) {
   if (failedDefinitively(outcome.state)) {
     throw new W3ActionError(
       'CALL_FAILED',
-      `contract call failed: state='${outcome.state}', transaction_id='${outcome.transaction_id}'`,
+      `ForDefi reports the contract call in failure state '${outcome.state}', transaction_id='${outcome.transaction_id}'`,
     )
   }
 }

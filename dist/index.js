@@ -28076,11 +28076,7 @@ async function fetchWithRetry(
       if (retryable && attempt < retries) {
         clearTimeout(timer)
         await res.body?.cancel().catch(() => {})
-        const retryAfter = res.headers.get('retry-after')
-        const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
-        const delay = Number.isFinite(retrySeconds)
-          ? retrySeconds * 1000
-          : RETRY_DELAY_MS * 2 ** attempt
+        const delay = retryAfterMs(res.headers.get('retry-after')) ?? RETRY_DELAY_MS * 2 ** attempt
         if (res.status >= 500) unsettled = true
         refuseAtDeadline(delay)
         await new Promise((r) => setTimeout(r, delay))
@@ -28117,6 +28113,20 @@ async function fetchWithRetry(
       throw e
     }
   }
+}
+
+/**
+ * The wait a `Retry-After` header asks for, in milliseconds, or `null` when
+ * the header is absent or in neither of its two forms (RFC 9110 §10.2.3):
+ * whole delay-seconds, or an HTTP-date, read as the time until that date and
+ * never less than zero.
+ */
+function retryAfterMs(value, now = Date.now()) {
+  const s = String(value ?? '').trim()
+  if (/^\d+$/.test(s)) return Number(s) * 1000
+  if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(s)) return null
+  const at = Date.parse(s)
+  return Number.isFinite(at) ? Math.max(0, at - now) : null
 }
 
 class ForDefiClient {
@@ -28159,7 +28169,7 @@ class ForDefiClient {
     } catch (_e) {
       throw new error_W3ActionError(
         'INVALID_RESPONSE',
-        `ForDefi returned unparseable response: ${text.slice(0, 200)}`,
+        `ForDefi answered with success but its body is not JSON, so what the request did is unknown: ${text.slice(0, 200)}`,
       )
     }
   }
@@ -28672,7 +28682,10 @@ function createFailure(err) {
  */
 function assertNamed(outcome) {
   if (!outcome.transaction_id) {
-    throw new error_W3ActionError('INVALID_RESPONSE', 'ForDefi created a transaction and returned no id')
+    throw new error_W3ActionError(
+      'INVALID_RESPONSE',
+      'ForDefi answered with success but named no transaction, so whether one was created is unknown',
+    )
   }
 }
 
@@ -28791,7 +28804,7 @@ function assertNotFailed(outcome) {
   if (failedDefinitively(outcome.state)) {
     throw new error_W3ActionError(
       'TRANSFER_FAILED',
-      `transfer failed: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
+      `ForDefi reports the transfer in failure state '${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
     )
   }
 }
@@ -28923,7 +28936,7 @@ function assertCallCreated(outcome) {
   if (failedDefinitively(outcome.state)) {
     throw new error_W3ActionError(
       'CALL_FAILED',
-      `contract call failed: state='${outcome.state}', transaction_id='${outcome.transaction_id}'`,
+      `ForDefi reports the contract call in failure state '${outcome.state}', transaction_id='${outcome.transaction_id}'`,
     )
   }
 }

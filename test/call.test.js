@@ -405,6 +405,20 @@ describe('call-contract: the step', () => {
     assert.match(r.stdout, /an earlier attempt went unanswered/)
   })
 
+  it('does not wait out a date-form Retry-After that would reach the deadline', async () => {
+    const r = await run(
+      { 'not-after': soon(20) },
+      {
+        status: 503,
+        json: {},
+        headers: { 'retry-after': new Date(Date.now() + 60_000).toUTCString() },
+      },
+    )
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 1)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+  })
+
   it('does not wait out a rate limit that would reach the deadline', async () => {
     const r = await run(
       { 'not-after': soon(20) },

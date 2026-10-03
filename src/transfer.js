@@ -112,7 +112,7 @@ export function assertNotFailed(outcome) {
   if (failedDefinitively(outcome.state)) {
     throw new W3ActionError(
       'TRANSFER_FAILED',
-      `transfer failed: state='${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
+      `ForDefi reports the transfer in failure state '${outcome.state || ''}', transaction_id='${outcome.transaction_id || ''}'`,
     )
   }
 }

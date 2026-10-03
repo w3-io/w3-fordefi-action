@@ -82,6 +82,9 @@ export function createFailure(err) {
  */
 export function assertNamed(outcome) {
   if (!outcome.transaction_id) {
-    throw new W3ActionError('INVALID_RESPONSE', 'ForDefi created a transaction and returned no id')
+    throw new W3ActionError(
+      'INVALID_RESPONSE',
+      'ForDefi answered with success but named no transaction, so whether one was created is unknown',
+    )
   }
 }

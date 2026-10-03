@@ -228,6 +228,7 @@ Tests that pin it, in `test/call.test.js` and `test/fordefi.test.js`:
 | `sends nothing at or after the deadline`                                   | Rule 2: the comparison is strict: a deadline equal to the present instant sends nothing. |
 | `sends nothing once the deadline has passed`                               | Rule 2: the step makes no request and fails with `DEADLINE_PASSED`.                      |
 | `does not wait out a retry that would reach the deadline`                  | Rule 3: a `Retry-After` longer than the time left is refused, not slept, after a 5xx.    |
+| `does not wait out a date-form Retry-After that would reach the deadline`  | Rule 3: a `Retry-After` given as an HTTP-date is read as the time until that date.       |
 | `does not wait out a rate limit that would reach the deadline`             | Rule 3: the same after a 429.                                                            |
 | `abandons an attempt still in flight at the deadline`                      | Rule 4: the client stops waiting at the deadline instead of at its 30-second timeout.    |
 | `abandons a response whose body stalls at the deadline`                    | Rule 4: a body still arriving at the deadline is cut off with the request.               |

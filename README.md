@@ -18,7 +18,11 @@ ForDefi (acquired by Paxos, Nov 2025) provides institutional-grade MPC custody a
 ForDefi uses two-layer auth:
 
 1. **Access token** (all requests) — JWT from API User creation in the ForDefi web console. Required for every command.
-2. **Private key** (transactional operations) — PEM-encoded P-256 key for ECDSA request signing. Required for creating transactions, contacts, vaults, etc.
+2. **Request-signing key** (transactional operations) — a PEM-encoded P-256 key for ECDSA request signing, required for creating transactions, contacts, vaults, etc. Supply it one of two ways:
+   - `private-key`: the PEM itself. The key enters the action's container.
+   - `signing-key-name`: the name of a W3 bridge secret holding the PEM. Requests are signed by the W3 bridge and the key never enters the container. Reference the secret in the step's `env` so the bridge receives it, and pass its name as a bare literal (see the second example).
+
+Every command that needs a signing key accepts either input.
 
 ```yaml
 - uses: w3-io/w3-fordefi-action@v0
@@ -32,6 +36,19 @@ ForDefi uses two-layer auth:
         "type": "evm_transaction",
         "details": { ... }
       }
+```
+
+With the key held as a W3 bridge secret named `FORDEFI_SIGNING_KEY`:
+
+```yaml
+- uses: w3-io/w3-fordefi-action@v0
+  env:
+    FORDEFI_SIGNING_KEY: ${{ secrets.FORDEFI_SIGNING_KEY }}
+  with:
+    command: create-transaction
+    access-token: ${{ secrets.FORDEFI_ACCESS_TOKEN }}
+    signing-key-name: FORDEFI_SIGNING_KEY
+    data: '{ "vault_id": "...", "type": "evm_transaction", "details": { ... } }'
 ```
 
 ## Commands (73)

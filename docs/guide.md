@@ -38,9 +38,22 @@ complexity: intermediate
 ForDefi uses two-layer auth:
 
 - **Access token** (required for all commands) — JWT from API User creation
-- **P-256 private key** (required for transactional commands) — PEM-encoded ECDSA key for request signing
+- **Request-signing key** (required for transactional commands) — a PEM-encoded P-256 ECDSA key, supplied as either:
+  - `private-key`: the PEM itself, which then enters the action's container; or
+  - `signing-key-name`: the name of a W3 bridge secret holding the PEM. The W3 bridge signs each request and the key never enters the container. Reference the secret in the step's `env` so the bridge receives it, and pass its name as a bare literal:
 
-Transactional commands are marked with (signing) below. Read-only commands need only the access token.
+```yaml
+- uses: w3-io/w3-fordefi-action@v0
+  env:
+    FORDEFI_SIGNING_KEY: ${{ secrets.FORDEFI_SIGNING_KEY }}
+  with:
+    command: call-contract
+    access-token: ${{ secrets.FORDEFI_ACCESS_TOKEN }}
+    signing-key-name: FORDEFI_SIGNING_KEY
+    # ...
+```
+
+Transactional commands are marked with (signing) below, and each accepts either input wherever `private-key` is listed. Read-only commands need only the access token. A transactional command given neither fails with `MISSING_SIGNER`.
 
 ## Command Reference
 
@@ -63,7 +76,7 @@ List all vaults in the organization.
 
 Create a new vault.
 
-**Inputs:** `data` (JSON), `private-key`
+**Inputs:** `data` (JSON), `private-key` or `signing-key-name`
 
 ```yaml
 - uses: w3-io/w3-fordefi-action@v0
@@ -101,13 +114,13 @@ List all assets in a vault.
 
 Create a new address in a vault.
 
-**Inputs:** `vault-id`, `data`, `private-key`
+**Inputs:** `vault-id`, `data`, `private-key` or `signing-key-name`
 
 #### archive-vault / restore-vault (signing)
 
 Archive or restore a vault.
 
-**Inputs:** `vault-id`, `private-key`
+**Inputs:** `vault-id`, `private-key` or `signing-key-name`
 
 #### rename-vault / rename-vault-address
 
@@ -121,7 +134,7 @@ Rename a vault or vault address.
 
 Create a transaction. Supports all chain types — EVM, Solana, Bitcoin, Cosmos, etc.
 
-**Inputs:** `data` (JSON), `private-key`
+**Inputs:** `data` (JSON), `private-key` or `signing-key-name`
 
 ```yaml
 - uses: w3-io/w3-fordefi-action@v0
@@ -146,19 +159,19 @@ Create a transaction. Supports all chain types — EVM, Solana, Bitcoin, Cosmos,
 
 Simplified transfer (shortcut for common transfer patterns).
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### create-transaction-and-wait (signing)
 
 Create a transaction and wait for it to reach a target state.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### call-contract (signing)
 
 Send one raw EVM transaction out of a vault. The caller supplies the calldata; the command builds the ForDefi payload around it and creates the transaction. With no calldata it is a plain transfer of the chain coin.
 
-**Inputs:** `vault-id`, `chain`, `to`, `idempotence-id`, `not-after` (all required), `calldata`, `value` (default `0`), `note`
+**Inputs:** `vault-id`, `chain`, `to`, `idempotence-id`, `not-after` (all required), `calldata`, `value` (default `0`), `note`, and `private-key` or `signing-key-name`
 
 **Outputs:** `transaction_id`, `state`, `tx_hash`, `explorer_url`, `result`
 
@@ -236,7 +249,7 @@ Each row is a statement about this run alone. Another run under the same idempot
 
 Transfer the chain coin or an ERC-20 out of a vault to an external address. The command builds the payload from primitives, so no calldata is hand-encoded, and waits for ForDefi to report the transaction completed.
 
-**Inputs:** `vault-id`, `chain`, `to`, `amount` (required, base units), `asset` (`native` or the ERC-20 contract; default `native`), `idempotence-id`, `note`
+**Inputs:** `vault-id`, `chain`, `to`, `amount` (required, base units), `asset` (`native` or the ERC-20 contract; default `native`), `idempotence-id`, `note`, and `private-key` or `signing-key-name`
 
 **Outputs:** `transaction_id`, `state`, `tx_hash`, `explorer_url`, `result`
 
@@ -265,7 +278,7 @@ The step fails only on a state ForDefi names as definitive failure or on a respo
 
 Simulate a transaction before execution. Returns fee estimates, effect predictions, revert detection, risk screening results, and policy matching.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 ```yaml
 - uses: w3-io/w3-fordefi-action@v0
@@ -286,25 +299,25 @@ Simulate a transaction before execution. Returns fee estimates, effect predictio
 
 Approve a pending transaction.
 
-**Inputs:** `transaction-id`, `private-key`
+**Inputs:** `transaction-id`, `private-key` or `signing-key-name`
 
 #### abort-transaction (signing)
 
 Abort a pending transaction.
 
-**Inputs:** `transaction-id`, `private-key`
+**Inputs:** `transaction-id`, `private-key` or `signing-key-name`
 
 #### trigger-signing (signing)
 
 Trigger MPC signing for a transaction.
 
-**Inputs:** `transaction-id`, `private-key`
+**Inputs:** `transaction-id`, `private-key` or `signing-key-name`
 
 #### push-transaction (signing)
 
 Push a signed transaction to the blockchain.
 
-**Inputs:** `transaction-id`, `private-key`
+**Inputs:** `transaction-id`, `private-key` or `signing-key-name`
 
 #### list-transactions / get-transaction / export-transactions
 
@@ -324,13 +337,13 @@ Get swap quotes from available providers.
 
 Execute a token swap.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### predict-swap (signing)
 
 Simulate a swap before execution.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### get-swap-providers
 
@@ -374,7 +387,7 @@ Get fee suggestions for a specific chain.
 
 Add a whitelisted contact.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### list-contacts
 
@@ -388,7 +401,7 @@ List contacts in the address book.
 
 Import cryptographic keys into the organization.
 
-**Inputs:** `data`, `private-key`
+**Inputs:** `data`, `private-key` or `signing-key-name`
 
 #### list-org-keys
 
@@ -441,11 +454,11 @@ steps:
 
 The action throws `W3ActionError` with structured codes:
 
-| Code                   | Meaning                                      |
-| ---------------------- | -------------------------------------------- |
-| `MISSING_ACCESS_TOKEN` | Access token not provided                    |
-| `MISSING_PRIVATE_KEY`  | Private key needed for transactional command |
-| `BRIDGE_ERROR`         | ForDefi API returned an error                |
+| Code                   | Meaning                                                                  |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `MISSING_ACCESS_TOKEN` | Access token not provided                                                |
+| `MISSING_SIGNER`       | Transactional command given neither `private-key` nor `signing-key-name` |
+| `BRIDGE_ERROR`         | ForDefi API returned an error                                            |
 
 ## Environments
 

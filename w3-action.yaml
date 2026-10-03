@@ -41,7 +41,7 @@ commands:
   - name: create-vault
     description: >
       Create a new MPC vault. Vault creation is a signed operation —
-      requires the PEM private key to be configured.
+      requires a request-signing key (private-key or signing-key-name) to be configured.
     inputs:
       data:
         type: string
@@ -79,7 +79,7 @@ commands:
   - name: create-vault-address
     description: >
       Create a new blockchain address in a vault. Signed operation —
-      requires the PEM private key. Use to add new chain receive
+      requires a request-signing key (private-key or signing-key-name). Use to add new chain receive
       addresses to an existing vault.
     inputs:
       vault-id:
@@ -100,7 +100,7 @@ commands:
   - name: create-transaction
     description: >
       Create a multi-chain transaction in a ForDefi vault. Signed
-      operation — requires the PEM private key. Transaction enters
+      operation — requires a request-signing key (private-key or signing-key-name). Transaction enters
       policy review before being broadcast. Pair with get-transaction
       to poll for completion.
     inputs:
@@ -120,7 +120,7 @@ commands:
   - name: create-transfer
     description: >
       Simplified transfer shortcut for moving assets between addresses.
-      Signed operation — requires the PEM private key. Convenience
+      Signed operation — requires a request-signing key (private-key or signing-key-name). Convenience
       wrapper over create-transaction for the common transfer case.
     inputs:
       data:
@@ -269,7 +269,7 @@ commands:
   - name: approve-transaction
     description: >
       Approve a pending transaction awaiting policy review. Signed
-      operation — requires the PEM private key. Use after a
+      operation — requires a request-signing key (private-key or signing-key-name). Use after a
       create-transaction call returns a pending state.
     inputs:
       transaction-id:
@@ -284,7 +284,7 @@ commands:
   - name: abort-transaction
     description: >
       Abort a pending transaction before it broadcasts. Signed
-      operation — requires the PEM private key. Irreversible once the
+      operation — requires a request-signing key (private-key or signing-key-name). Irreversible once the
       transaction has moved past the abortable state.
     inputs:
       transaction-id:
@@ -347,7 +347,7 @@ commands:
   - name: create-swap
     description: >
       Execute a token swap on the chosen provider. Signed operation —
-      requires the PEM private key. Pair with get-swap-quotes to pick
+      requires a request-signing key (private-key or signing-key-name). Pair with get-swap-quotes to pick
       a route first.
     inputs:
       data:

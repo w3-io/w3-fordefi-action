@@ -196,7 +196,7 @@ Four rules give it:
 1. The request is signed once, before the first attempt, and is refused unless its signed timestamp (`x-timestamp`) is strictly earlier than the deadline. Every retry reuses that signature and timestamp.
 2. No attempt begins at or after the deadline. The check runs immediately before every attempt, the first and each retry alike.
 3. A retry wait that would end at or after the deadline is not waited out, whether it is the client's backoff or a `Retry-After` the server asked for.
-4. An attempt still in flight at the deadline is abandoned there: the client closes the request rather than wait out its 30-second timeout.
+4. An attempt still in flight at the deadline is abandoned there, whether it is waiting for the response or for the rest of its body: the client closes the request rather than wait out its 30-second timeout.
 
 Each ends the step with `DEADLINE_PASSED`.
 
@@ -217,6 +217,7 @@ Tests that pin it, in `test/call.test.js` and `test/fordefi.test.js`:
 | `does not wait out a retry that would reach the deadline`                  | Rule 3: a `Retry-After` longer than the time left is refused, not slept, after a 5xx.    |
 | `does not wait out a rate limit that would reach the deadline`             | Rule 3: the same after a 429.                                                            |
 | `abandons an attempt still in flight at the deadline`                      | Rule 4: the client stops waiting at the deadline instead of at its 30-second timeout.    |
+| `abandons a response whose body stalls at the deadline`                    | Rule 4: a body still arriving at the deadline is cut off with the request.               |
 | `retries inside the deadline`                                              | Rules 2 and 3: a retry that fits before the deadline is still sent.                      |
 
 ##### What a failed step says

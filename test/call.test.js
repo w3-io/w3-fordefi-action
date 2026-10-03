@@ -433,6 +433,22 @@ describe('call-contract: the step', () => {
     assert.match(r.stdout, /an earlier attempt went unanswered/)
   })
 
+  it('abandons a response whose body stalls at the deadline', async () => {
+    // Headers arrive at once and the body never finishes. The deadline cuts
+    // the exchange off as it would one that never answered.
+    const started = Date.now()
+    const r = await run(
+      { 'not-after': soon(2) },
+      { status: 201, json: { id: 'fd-uuid', state: 'approved' }, stallBody: true },
+    )
+    assert.equal(r.code, 1)
+    assert.equal(requests.length, 1)
+    assert.ok(Date.now() - started < 10_000)
+    assert.equal(r.outputs.transaction_id, undefined)
+    assert.equal(r.outputs['error-code'], 'DEADLINE_PASSED')
+    assert.match(r.stdout, /an earlier attempt went unanswered/)
+  })
+
   it('retries inside the deadline', async () => {
     const r = await run({ 'not-after': soon(20) }, (n) =>
       n === 1

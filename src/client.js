@@ -31,9 +31,12 @@ const MAX_RETRIES = 3
 const RETRY_DELAY_MS = 1000
 
 /**
- * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response
- * and whether an earlier attempt ended without a verdict: a timeout or a 5xx
- * may have been processed, where a 429 was not.
+ * Fetch with retry on 429, 5xx and timeouts. Resolves to the final response,
+ * its body, and whether an earlier attempt ended without a verdict: a timeout
+ * or a 5xx may have been processed, where a 429 was not. An attempt's timeout
+ * covers its whole exchange, the body as well as the headers, so a server
+ * that answers with headers and then stalls is cut off like one that never
+ * answers.
  *
  * `retryUnsettled: false` retries a 429 and nothing else. It is for a request
  * that is not safe to repeat: a create sent without an idempotence key, where
@@ -70,9 +73,10 @@ async function fetchWithRetry(
     const timer = setTimeout(() => controller.abort(), budget)
     try {
       const res = await fetch(url, { ...opts, signal: controller.signal })
-      clearTimeout(timer)
       const retryable = res.status === 429 || (res.status >= 500 && retryUnsettled)
       if (retryable && attempt < retries) {
+        clearTimeout(timer)
+        await res.body?.cancel().catch(() => {})
         const retryAfter = res.headers.get('retry-after')
         const retrySeconds = retryAfter ? parseInt(retryAfter, 10) : NaN
         const delay = Number.isFinite(retrySeconds)
@@ -83,7 +87,17 @@ async function fetchWithRetry(
         await new Promise((r) => setTimeout(r, delay))
         continue
       }
-      return { res, unsettled }
+      // An error body is read for its message only, so a failure to read it is
+      // tolerated; an abort is not, because it is the timer cutting the
+      // exchange short.
+      const text = res.ok
+        ? await res.text()
+        : await res.text().catch((e) => {
+            if (e.name === 'AbortError') throw e
+            return ''
+          })
+      clearTimeout(timer)
+      return { res, text, unsettled }
     } catch (e) {
       clearTimeout(timer)
       const timedOut = e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT'
@@ -129,21 +143,18 @@ export class ForDefiClient {
   // ---------------------------------------------------------------------------
 
   async #apiCall(method, url, headers, body, retry) {
-    const { res, unsettled } = await fetchWithRetry(
+    const { res, text, unsettled } = await fetchWithRetry(
       url,
       { method, headers, ...(body !== undefined ? { body } : {}) },
       retry,
     )
     if (!res.ok) {
-      const text = await res.text().catch(() => '')
       throw new W3ActionError('HTTP_ERROR', `${res.status}: ${text}`, {
         statusCode: res.status,
         details: { unsettled },
       })
     }
-    if (res.status === 204) return { success: true }
-    const text = await res.text()
-    if (!text) return { success: true }
+    if (res.status === 204 || !text) return { success: true }
     try {
       return JSON.parse(text)
     } catch (_e) {

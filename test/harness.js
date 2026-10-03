@@ -34,8 +34,9 @@ function parseOutputs(text) {
 /**
  * Start the stand-in. `run(inputs, response)` runs the action once with
  * `inputs` (an `undefined` value leaves the input unset) and answers every
- * request with `response` (`{ status, json, headers?, delayMs? }`, the last
- * holding the answer back), or with `response(n)` for the n-th request. It
+ * request with `response` (`{ status, json, headers?, delayMs?, stallBody? }`:
+ * `delayMs` holds the whole answer back, `stallBody` sends the headers and
+ * then never finishes the body), or with `response(n)` for the n-th request. It
  * resolves to the exit code, stdout, the step outputs and the requests the
  * stand-in received. `close()` stops the server.
  */
@@ -54,7 +55,7 @@ export async function startStandIn() {
     req.on('data', (c) => (body += c))
     req.on('end', () => {
       requests.push({ method: req.method, url: req.url, headers: req.headers, body })
-      const { status, json, headers, delayMs = 0 } = respond(requests.length)
+      const { status, json, headers, delayMs = 0, stallBody = false } = respond(requests.length)
       const answer = () => {
         // A zero retry-after keeps a retried attempt from waiting out the
         // backoff, unless the response sets its own.
@@ -63,6 +64,10 @@ export async function startStandIn() {
           'retry-after': '0',
           ...headers,
         })
+        if (stallBody) {
+          res.write(JSON.stringify(json).slice(0, 1))
+          return
+        }
         res.end(JSON.stringify(json))
       }
       // Unreferenced, so an answer still held back when the tests end does
@@ -92,6 +97,7 @@ export async function startStandIn() {
   }
 
   async function close() {
+    server.closeAllConnections()
     await new Promise((r) => server.close(r))
     rmSync(dir, { recursive: true, force: true })
   }

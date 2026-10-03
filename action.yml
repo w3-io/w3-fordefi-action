@@ -53,7 +53,8 @@ inputs:
 
   signing-key-name:
     description: >-
-      Name of the W3 bridge secret holding the PEM-encoded P-256 key. When set,
+      Name of the W3 bridge secret holding the PEM-encoded P-256 key, with no
+      W3_SECRET_ prefix (e.g. FORDEFI_SIGNING_KEY). When set,
       requests are signed bridge-side and the key never enters the container;
       takes the place of private-key
     required: false

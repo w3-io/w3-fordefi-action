@@ -20,7 +20,7 @@ ForDefi uses two-layer auth:
 1. **Access token** (all requests) — JWT from API User creation in the ForDefi web console. Required for every command.
 2. **Request-signing key** (transactional operations) — a PEM-encoded P-256 key for ECDSA request signing, required for creating transactions, contacts, vaults, etc. Supply it one of two ways:
    - `private-key`: the PEM itself. The key enters the action's container.
-   - `signing-key-name`: the name of a W3 bridge secret holding the PEM. Requests are signed by the W3 bridge and the key never enters the container. Reference the secret in the step's `env` so the bridge receives it, and pass its name as a bare literal (see the second example).
+   - `signing-key-name`: the name of a W3 bridge secret holding the PEM. Requests are signed by the W3 bridge and the key never enters the container. Reference the secret in the step's `env` so the bridge receives it, and pass its name as a bare literal, the name the bridge holds it under with no `W3_SECRET_` prefix (see the second example).
 
 Every command that needs a signing key accepts either input.
 

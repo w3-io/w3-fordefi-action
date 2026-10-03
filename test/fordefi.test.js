@@ -10,7 +10,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
-import { ForDefiClient, retryAfterMs } from '../src/client.js'
+import { ForDefiClient, isTimeout, retryAfterMs } from '../src/client.js'
 import { extractOutcome } from '../src/outcome.js'
 import { assertNotFailed, buildTransferPayload, encodeErc20Transfer } from '../src/transfer.js'
 import { W3ActionError } from '@w3-io/action-core'
@@ -375,6 +375,61 @@ describe('ForDefiClient: retryAfterMs', () => {
     for (const v of [null, undefined, '', '1.5', '-1', '12abc', '2026-10-03T01:02:00Z', 'soon']) {
       assert.equal(retryAfterMs(v, now), null)
     }
+  })
+})
+
+describe('ForDefiClient: timeouts', () => {
+  const connectTimeout = () => {
+    const cause = Object.assign(new Error('Connect Timeout Error'), {
+      code: 'UND_ERR_CONNECT_TIMEOUT',
+    })
+    return new TypeError('fetch failed', { cause })
+  }
+
+  it('reads a timeout from the error or from its cause', () => {
+    assert.equal(isTimeout(connectTimeout()), true)
+    assert.equal(isTimeout({ code: 'UND_ERR_HEADERS_TIMEOUT' }), true)
+    assert.equal(isTimeout(Object.assign(new Error('x'), { name: 'AbortError' })), true)
+    assert.equal(
+      isTimeout(new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })),
+      false,
+    )
+    assert.equal(isTimeout(undefined), false)
+  })
+
+  it('retries a keyed create after a connection timeout reported on the cause', async () => {
+    let n = 0
+    global.fetch = async () => {
+      n++
+      if (n === 1) throw connectTimeout()
+      return { ok: true, status: 200, headers: new Map(), text: async () => '{"id":"fd"}' }
+    }
+    const signer = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer })
+    const result = await client.createTransaction({ vault_id: 'v' }, { idempotenceId: 'k' })
+    assert.equal(result.id, 'fd')
+    assert.equal(n, 2)
+  })
+
+  it('reports an unkeyed create that timed out as TIMEOUT, without retrying', async () => {
+    let n = 0
+    global.fetch = async () => {
+      n++
+      throw connectTimeout()
+    }
+    const signer = generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({
+      type: 'pkcs8',
+      format: 'pem',
+    })
+    const client = new ForDefiClient({ accessToken: 'test-token', privateKey: signer })
+    await assert.rejects(
+      () => client.createTransaction({ vault_id: 'v' }),
+      (err) => err instanceof W3ActionError && err.code === 'TIMEOUT',
+    )
+    assert.equal(n, 1)
   })
 })
 

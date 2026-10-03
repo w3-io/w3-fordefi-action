@@ -28101,7 +28101,7 @@ async function fetchWithRetry(
       return { res, text, unsettled }
     } catch (e) {
       clearTimeout(timer)
-      const timedOut = e.name === 'AbortError' || e.code === 'UND_ERR_CONNECT_TIMEOUT'
+      const timedOut = isTimeout(e)
       if (timedOut) {
         unsettled = true
         if (retryUnsettled && attempt < retries) {
@@ -28113,12 +28113,30 @@ async function fetchWithRetry(
         // An attempt the deadline cut short reports the deadline.
         refuseAtDeadline()
       }
-      if (e.name === 'AbortError') {
+      if (timedOut) {
         throw new error_W3ActionError('TIMEOUT', `Request timed out after ${budget}ms: ${url}`)
       }
       throw e
     }
   }
+}
+
+/** Undici's timeout codes. `fetch` reports them on the error's `cause`. */
+const UNDICI_TIMEOUTS = new Set([
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+])
+
+/**
+ * Whether a failed attempt timed out: aborted by its own timer, or timed out
+ * inside undici, which `fetch` reports as a `TypeError` whose `cause` carries
+ * the code.
+ */
+function isTimeout(e) {
+  return (
+    e?.name === 'AbortError' || UNDICI_TIMEOUTS.has(e?.code) || UNDICI_TIMEOUTS.has(e?.cause?.code)
+  )
 }
 
 /**
